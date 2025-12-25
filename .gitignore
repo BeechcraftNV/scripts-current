@@ -1,0 +1,46 @@
+# Binary executables (download/install separately)
+logseq
+uv
+uvx
+*.AppImage
+*.deb
+*.rpm
+
+# Symlinks to installed applications
+claude
+zed
+
+# Claude Code settings directory
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local configuration
+*.local
+.env
+.env.local
+
+# Editor directories
+.vscode/
+.idea/
+*.sublime-*
+
+# Backup files
+*.bak
+*.backup

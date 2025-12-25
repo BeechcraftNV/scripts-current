@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# Exit on error and undefined variables
+set -eu
+
+# Review recent systemd logs for errors
+# Usage: ./check-systemd-errors.sh [time-period]
+# Examples: ./check-systemd-errors.sh "1 hour ago"
+#           ./check-systemd-errors.sh "today"
+
+TIME_PERIOD="${1:-1 hour ago}"
+
+echo "=== Systemd Errors since $TIME_PERIOD ==="
+echo
+
+journalctl --since "$TIME_PERIOD" --priority=err --no-pager --reverse
+
+echo
+echo "=== Summary ==="
+journalctl --since "$TIME_PERIOD" --priority=err --no-pager | \
+  grep -oP '(?<=]: ).*' | sort | uniq -c | sort -rn | head -10
