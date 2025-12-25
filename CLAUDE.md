@@ -41,6 +41,47 @@ Reviews recent systemd logs for errors and provides a summary.
 - `check-systemd-errors "today"`
 - `check-systemd-errors "24 hours ago"`
 
+### sync-scripts
+Helper script to sync the repository with GitHub before editing.
+
+**Usage:** `sync-scripts`
+
+**What it does:**
+- Checks for uncommitted changes (prevents pull if found)
+- Checks for unpushed commits (reminds to push first)
+- Pulls latest from GitHub using `git pull --rebase`
+- Shows current branch and latest commit
+
+**Use case:** Run before starting an editing session to ensure working with latest code.
+
+## Git Workflow
+
+This directory is version controlled and synced to GitHub at `git@github.com:BeechcraftNV/scripts-current.git`.
+
+### Before Making Changes
+**IMPORTANT:** When editing scripts in this repository, follow this workflow:
+
+1. **Sync first:** Run `sync-scripts` to pull latest changes from GitHub
+2. **Make changes:** Edit scripts as needed
+3. **Test:** Verify scripts work correctly
+4. **Commit and push:**
+   ```bash
+   git add <files>
+   git commit -m "descriptive message"
+   git push
+   ```
+
+### Why This Matters
+- Prevents working on outdated code
+- Avoids merge conflicts
+- Keeps local and remote in sync
+- Ensures changes aren't lost
+
+### If Sync Fails
+- **Uncommitted changes:** Commit them first before syncing
+- **Unpushed commits:** Push them first before syncing
+- **Merge conflicts:** User will need to resolve manually
+
 ## Script Standards
 
 ### Naming and Structure
