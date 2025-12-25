@@ -66,6 +66,33 @@ check-systemd-errors "since boot"
 **Requirements:**
 - Access to journalctl (usually requires user to be in systemd-journal group)
 
+---
+
+### sync-scripts
+
+Helper script to sync the repository with GitHub before editing.
+
+**Usage:**
+```bash
+sync-scripts
+```
+
+**What it does:**
+- Checks for uncommitted changes and warns if found
+- Checks for unpushed commits and reminds to push
+- Pulls latest from GitHub using rebase
+- Shows current branch and latest commit
+
+**Safety features:**
+- Prevents pull if you have uncommitted changes
+- Prevents pull if you have unpushed commits
+- Provides helpful error messages with suggested commands
+
+**Use case:** Run this before starting an editing session to ensure you're working with the latest code.
+
+**Requirements:**
+- Git repository configured with remote origin
+
 ## Installation
 
 ### Clone the Repository
@@ -116,6 +143,7 @@ chmod +x ~/.local/bin/check-systemd-errors
 ├── GEMINI.md, Gemini.md              # Additional documentation
 ├── check-systemd-errors              # Systemd error checker
 ├── check-systemd-errors-howto.md     # Usage guide
+├── sync-scripts                      # Repository sync helper
 └── update-all                        # System update script
 ```
 
