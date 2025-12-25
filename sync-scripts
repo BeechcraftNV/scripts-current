@@ -1,0 +1,53 @@
+#!/bin/bash
+# Sync scripts repository with GitHub
+# Usage: sync-scripts
+
+set -e
+
+REPO_DIR="$HOME/.local/bin"
+
+cd "$REPO_DIR"
+
+echo "=== Syncing scripts repository ==="
+echo ""
+
+# Show current status
+git status
+
+echo ""
+
+# Check for uncommitted changes
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo "⚠️  You have uncommitted changes. Commit them first:"
+    echo ""
+    git status --short
+    echo ""
+    echo "Tip: Run these commands to commit:"
+    echo "  cd ~/.local/bin"
+    echo "  git add <files>"
+    echo "  git commit -m 'your message'"
+    echo "  git push"
+    exit 1
+fi
+
+# Check if we're ahead of remote
+LOCAL=$(git rev-parse @ 2>/dev/null)
+REMOTE=$(git rev-parse @{u} 2>/dev/null)
+
+if [ "$LOCAL" != "$REMOTE" ]; then
+    AHEAD=$(git rev-list @{u}..HEAD --count 2>/dev/null || echo "0")
+    if [ "$AHEAD" -gt 0 ]; then
+        echo "⚠️  You have $AHEAD unpushed commit(s). Push them first:"
+        echo "  git push"
+        exit 1
+    fi
+fi
+
+echo "Pulling latest from GitHub..."
+git pull --rebase
+
+echo ""
+echo "✅ Scripts synced. Ready to work!"
+echo ""
+echo "Current branch: $(git branch --show-current)"
+echo "Latest commit: $(git log -1 --oneline)"
