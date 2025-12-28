@@ -6,6 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a personal utility scripts directory (`~/.local/bin`) containing custom system maintenance and automation tools.
 
+## Repository Details
+
+- **Git remote:** `git@github.com:BeechcraftNV/scripts-current.git`
+- **Purpose:** Personal utility scripts synced across systems
+- **Contains:** Executable bash scripts, binary symlinks, and downloaded tools
+- **Git workflow:** Rebase-first approach to maintain clean history
+
+### What's Tracked vs. Ignored
+
+**Tracked (committed to git):**
+- Bash scripts (update-all, check-systemd-errors, sync-scripts, update-glam)
+- Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
+
+**Ignored (see .gitignore):**
+- Binary executables (logseq, uv, uvx)
+- Symlinks to applications (claude, zed)
+- Python bytecode and virtual environments
+- Editor directories (.vscode/, .idea/)
+- Temporary files (*.tmp, *.log, *.swp)
+- Package files (*.AppImage, *.deb, *.rpm)
+- Claude Code settings (.claude/)
+
 ## Key Scripts
 
 ### update-all
@@ -30,6 +52,16 @@ Comprehensive system update script that handles multiple package managers with d
 - System service update detection (systemd, dbus, udev)
 - Color-coded comprehensive summary report
 - Disk space reporting
+
+### update-glam
+Modern, interactive version of `update-all` using Charm CLI tools (gum/glow).
+
+**Dependencies:** Requires `gum` and `glow` installed
+**Features:**
+- Interactive confirmation prompts
+- Spinner animations for long-running operations
+- Markdown-formatted reports via glow
+- Interactive post-update menu
 
 ### check-systemd-errors
 Reviews recent systemd logs for errors and provides a summary.
@@ -112,9 +144,64 @@ This directory is version controlled and synced to GitHub at `git@github.com:Bee
 **Syntax check:** `bash -n script.sh`
 **Debug mode:** `bash -x script.sh`
 
-## Architecture Notes
+## Architecture Patterns
 
-- This directory contains standalone utility scripts, not a cohesive application
-- Scripts use temporary files with trap cleanup (see update-all for pattern)
-- Color output uses ANSI escape codes (RED, GREEN, YELLOW, BLUE, NC)
-- Arrays track state for reporting (UPDATED_ITEMS, SKIPPED_ITEMS, FAILED_ITEMS, AVAILABLE_NOT_RUN)
+### Script Structure
+All bash scripts follow consistent patterns:
+
+1. **Error handling:**
+   - Start with `set -e` to exit on errors
+   - Use `set +e` temporarily when errors are expected/acceptable
+   - Include descriptive error messages with context
+
+2. **Temporary file management:**
+   ```bash
+   OUTPUT=$(mktemp)
+   trap 'rm -f $OUTPUT' EXIT  # Automatic cleanup
+   ```
+
+3. **State tracking arrays:**
+   ```bash
+   declare -a UPDATED_ITEMS=()
+   declare -a SKIPPED_ITEMS=()
+   declare -a FAILED_ITEMS=()
+   declare -a AVAILABLE_NOT_RUN=()
+   ```
+   Items are added during execution, then reported in final summary.
+
+4. **Color output:**
+   ```bash
+   RED='\033[0;31m'
+   GREEN='\033[0;32m'
+   YELLOW='\033[1;33m'
+   BLUE='\033[0;34m'
+   NC='\033[0m'  # No Color
+   ```
+
+5. **Command checking:**
+   ```bash
+   if command -v docker &> /dev/null; then
+       # Command exists, use it
+   fi
+   ```
+
+### Output Patterns
+
+**update-all style:** Comprehensive reporting with:
+- Real-time command output during execution
+- Final summary report with categorized results
+- Impact assessment and reboot recommendations
+- Version comparisons (running vs. installed kernel)
+
+**update-glam style:** Interactive UX with:
+- `gum spin` for progress indicators
+- `gum confirm` for user prompts
+- `glow` for rendering markdown reports
+- `gum choose` for menu selections
+
+### Git Integration
+
+Scripts in this repository use `sync-scripts` to maintain sync with GitHub:
+- Checks for uncommitted/unpushed changes before pull
+- Uses `git pull --rebase` to maintain linear history
+- Provides clear error messages with suggested commands
