@@ -25,7 +25,7 @@ FLATPAK_USER_OUTPUT=$(mktemp)
 CLEANUP_OUTPUT=$(mktemp)
 
 # Cleanup temp files on exit
-trap 'rm -f $APT_OUTPUT $FLATPAK_SYS_OUTPUT $FLATPAK_USER_OUTPUT $CLEANUP_OUTPUT' EXIT
+trap 'rm -f "$APT_OUTPUT" "$FLATPAK_SYS_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"' EXIT
 
 echo "=== Updating APT packages ==="
 if sudo apt update 2>&1 | tee "$APT_OUTPUT"; then
@@ -177,7 +177,7 @@ echo "║                     UPDATE SUMMARY REPORT                      ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 
 echo -e "\n${GREEN}✅ UPDATED:${NC}"
-if [ ${#UPDATED_ITEMS[@]} -eq 0 ]; then
+if [ "${#UPDATED_ITEMS[@]}" -eq 0 ]; then
     echo "  • Nothing was updated"
 else
     for item in "${UPDATED_ITEMS[@]}"; do
@@ -186,7 +186,7 @@ else
 fi
 
 echo -e "\n${BLUE}⏭️  SKIPPED (Already Current):${NC}"
-if [ ${#SKIPPED_ITEMS[@]} -eq 0 ]; then
+if [ "${#SKIPPED_ITEMS[@]}" -eq 0 ]; then
     echo "  • No items skipped"
 else
     for item in "${SKIPPED_ITEMS[@]}"; do
@@ -194,14 +194,14 @@ else
     done
 fi
 
-if [ ${#FAILED_ITEMS[@]} -gt 0 ]; then
+if [ "${#FAILED_ITEMS[@]}" -gt 0 ]; then
     echo -e "\n${RED}❌ FAILED:${NC}"
     for item in "${FAILED_ITEMS[@]}"; do
         echo "  • $item"
     done
 fi
 
-if [ ${#AVAILABLE_NOT_RUN[@]} -gt 0 ]; then
+if [ "${#AVAILABLE_NOT_RUN[@]}" -gt 0 ]; then
     echo -e "\n${YELLOW}⚠️  AVAILABLE BUT NOT AUTO-UPDATED:${NC}"
     for item in "${AVAILABLE_NOT_RUN[@]}"; do
         echo "  • $item"

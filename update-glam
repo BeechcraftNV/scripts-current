@@ -12,19 +12,19 @@ declare -a SKIPPED_ITEMS=()
 APT_OUTPUT=$(mktemp)
 FLAT_SYS=$(mktemp)
 CLEAN_OUT=$(mktemp)
-trap 'rm -f $APT_OUTPUT $FLAT_SYS $CLEAN_OUT' EXIT
+trap 'rm -f "$APT_OUTPUT" "$FLAT_SYS" "$CLEAN_OUT"' EXIT
 
 # --- 1. APT UPDATES ---
 gum style --foreground 212 "󰚰 Starting APT Update..."
 # gum spin hides the messy output but runs the command
-gum spin --spinner dot --title "Refreshing package lists..." -- sudo apt update 2>&1 > "$APT_OUTPUT"
+gum spin --spinner dot --title "Refreshing package lists..." -- sudo apt update > "$APT_OUTPUT" 2>&1
 
 UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "Listing..." | wc -l)
 
 if [ "$UPGRADABLE" -gt 0 ]; then
     gum style --foreground 43 "📦 $UPGRADABLE packages ready for upgrade."
     if gum confirm "Apply APT upgrades?"; then
-        gum spin --spinner pulse --title "Upgrading packages..." -- sudo apt full-upgrade -y 2>&1 >> "$APT_OUTPUT"
+        gum spin --spinner pulse --title "Upgrading packages..." -- sudo apt full-upgrade -y >> "$APT_OUTPUT" 2>&1
         UPDATED_ITEMS+=("APT: $UPGRADABLE packages upgraded")
     else
         SKIPPED_ITEMS+=("APT Upgrades (User cancelled)")
@@ -53,7 +53,7 @@ INSTALLED_KERNEL=$(dpkg -l | grep "^ii.*linux-image-[0-9]" | sort -V | tail -1 |
 # We build a Markdown string to feed into Glow
 REPORT="# 🚀 System Update Report\n\n"
 
-if [ ${#UPDATED_ITEMS[@]} -eq 0 ]; then
+if [ "${#UPDATED_ITEMS[@]}" -eq 0 ]; then
     REPORT+="> **Everything was already up to date!**\n\n"
 else
     REPORT+="### ✅ Successfully Updated\n"
