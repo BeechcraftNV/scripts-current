@@ -121,6 +121,71 @@ sync-scripts
 **Requirements:**
 - Git repository configured with remote origin
 
+---
+
+### lan-scanner
+
+Comprehensive LAN device scanner that discovers both active and sleeping devices on your network.
+
+**Usage:**
+```bash
+lan-scanner
+```
+
+**Features:**
+- Combines nmap, mDNS/Bonjour, and ARP cache for complete device discovery
+- Finds sleeping/idle devices (phones, tablets, printers)
+- Shows IP address, hostname, and device manufacturer
+- Color-coded status indicators (active vs. cached)
+- Auto-detects network range
+- Auto-elevates to sudo when needed
+
+**What it scans:**
+- **nmap with ARP:** Active devices responding to network requests
+- **mDNS/Bonjour:** Apple devices, printers, smart home devices
+- **ARP cache:** Recently seen devices (even if currently sleeping)
+
+**Output includes:**
+- IP address (sorted numerically)
+- Hostname (from DNS, mDNS, or reverse lookup)
+- Device manufacturer (from MAC address vendor database)
+- Status: Active (●) or Cached/Recently Seen (○)
+
+**Requirements:**
+- `nmap` - Network scanning tool
+- `avahi-browse` - mDNS/Bonjour discovery (usually pre-installed on Linux)
+- sudo access (script will auto-request)
+
+**Example output:**
+```
+1.  ● 192.168.29.1    │ router.local                  │ ASUSTek Computer
+2.  ● 192.168.29.43   │ server.local                  │ Shenzhen Madigi
+3.  ○ 192.168.29.171  │ HP846993CE62EB.local          │ HP Inc.
+```
+
+---
+
+### format-nmap
+
+Helper script to format nmap output in a more readable form.
+
+**Usage:**
+```bash
+format-nmap
+```
+
+**What it does:**
+- Runs `nmap -sn` scan on detected network
+- Formats output with clear section headers
+- Shows host status with visual indicators
+- Displays MAC addresses and vendor info separately
+
+**Note:** This is a simpler alternative to `lan-scanner`. For comprehensive device discovery, use `lan-scanner` instead.
+
+**Requirements:**
+- `nmap` - Network scanning tool
+- sudo access
+
 ## Installation
 
 ### Clone the Repository
@@ -171,6 +236,8 @@ chmod +x ~/.local/bin/check-systemd-errors
 ├── GEMINI.md, Gemini.md              # Additional documentation
 ├── check-systemd-errors              # Systemd error checker
 ├── check-systemd-errors-howto.md     # Usage guide
+├── format-nmap                       # nmap output formatter
+├── lan-scanner                       # Comprehensive LAN device scanner
 ├── sync-scripts                      # Repository sync helper
 ├── update-all                        # System update script
 └── update-glam                       # Interactive update script (gum/glow)
@@ -179,7 +246,7 @@ chmod +x ~/.local/bin/check-systemd-errors
 ### What's Tracked in Git
 
 **Committed to repository:**
-- Shell scripts (update-all, update-glam, check-systemd-errors, sync-scripts)
+- Shell scripts (update-all, update-glam, check-systemd-errors, sync-scripts, lan-scanner, format-nmap)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 - Configuration (.gitignore)
 
