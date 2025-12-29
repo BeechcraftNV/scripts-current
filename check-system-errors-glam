@@ -1,0 +1,37 @@
+#!/bin/bash
+# check-systemd-glam: A smart systemd error troubleshooter
+
+# 1. Ask the user for the time period using Gum (better than manual typing)
+TIME_PERIOD=$(gum choose --header "Check errors from when?" "1 hour ago" "today" "yesterday" "custom")
+
+if [ "$TIME_PERIOD" == "custom" ]; then
+    TIME_PERIOD=$(gum input --placeholder "e.g., 2 hours ago")
+fi
+
+# 2. Get the errors (your original logic)
+# We store them in a variable to feed into the AI
+ERRORS=$(journalctl --since "$TIME_PERIOD" --priority=err --no-pager --reverse)
+
+if [ -z "$ERRORS" ]; then
+    gum style --foreground 46 --bold "✔ No critical systemd errors found since $TIME_PERIOD!"
+    exit 0
+fi
+
+# 3. The "AI Call" (Bells & Whistles)
+# We show a spinner while the AI thinks
+clear
+gum style --foreground 212 --bold "🚑 Diagnosing System Errors..."
+
+# Pipe the logs into Mods
+# We tell it to be a Linux expert and output Markdown for Glow
+echo "$ERRORS" | mods "You are a Linux system expert. 
+Review these systemd logs from the last $TIME_PERIOD. 
+1. Identify the most critical error. 
+2. Explain what is causing it in simple terms. 
+3. Provide a single command to fix or investigate further.
+Format as Markdown." | glow -
+
+# 4. Optional: Action Menu
+if gum confirm "Would you like to see the raw logs now?"; then
+    echo "$ERRORS" | gum pager
+fi

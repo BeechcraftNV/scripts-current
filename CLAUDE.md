@@ -16,7 +16,7 @@ This is a personal utility scripts directory (`~/.local/bin`) containing custom 
 ### What's Tracked vs. Ignored
 
 **Tracked (committed to git):**
-- Bash scripts (update-all, check-systemd-errors, sync-scripts, update-glam)
+- Bash scripts (update-all, check-systemd-errors, check-system-errors-glam, sync-scripts, update-glam)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 
 **Ignored (see .gitignore):**
@@ -72,6 +72,24 @@ Reviews recent systemd logs for errors and provides a summary.
 - `check-systemd-errors` (default: last hour)
 - `check-systemd-errors "today"`
 - `check-systemd-errors "24 hours ago"`
+
+### check-system-errors-glam
+AI-enhanced systemd error troubleshooter using Charm CLI tools and Mods.
+
+**Dependencies:** Requires `gum`, `glow`, and `mods` installed
+**Features:**
+- Interactive time period selection via gum
+- AI-powered error analysis using Mods
+- Explains errors in simple terms
+- Provides actionable fix commands
+- Optional raw log viewing with pager
+
+**How it works:**
+- Prompts user to select time period interactively
+- Fetches systemd errors using journalctl
+- Sends errors to AI (via mods) for diagnosis
+- Renders markdown analysis with glow
+- Optionally displays raw logs
 
 ### sync-scripts
 Helper script to sync the repository with GitHub before editing.
