@@ -45,7 +45,8 @@ ip neigh show | grep -v FAILED | awk '{print $1":"$5}' > "$ARP_OUTPUT"
 
 # Run nmap scan with ARP packets (works better for sleeping devices)
 echo -e "${YELLOW}[2/3] Running network scan (ARP + ping)...${NC}"
-nmap -sn -PR $NETWORK.0/24 2>/dev/null > "$NMAP_OUTPUT"
+# Use aggressive timing (-T4), ARP ping (-PR), and ICMP ping (-PE)
+nmap -sn -T4 -PR -PE --min-rate 1000 $NETWORK.0/24 2>/dev/null > "$NMAP_OUTPUT"
 
 # Run mDNS scan and deduplicate
 echo -e "${YELLOW}[3/3] Scanning for mDNS/Bonjour devices...${NC}"
@@ -146,7 +147,10 @@ for ip in "${!all_ips[@]}"; do
         # Try to get vendor from MAC using nmap's database
         vendor=""
         if [ -n "$mac" ]; then
-            vendor=$(grep -i "^${mac:0:8}" /usr/share/nmap/nmap-mac-prefixes 2>/dev/null | cut -f2 || echo "")
+            # Extract OUI (first 3 octets) and format for nmap database lookup
+            # Remove colons and take first 6 hex digits, convert to uppercase
+            oui=$(echo "$mac" | tr -d ':' | cut -c1-6 | tr '[:lower:]' '[:upper:]')
+            vendor=$(grep "^$oui" /usr/share/nmap/nmap-mac-prefixes 2>/dev/null | cut -f2 || echo "")
         fi
         echo "$ip|$hostname|$mac|$vendor|CACHED" >> "$COMBINED_OUTPUT"
     fi
@@ -206,5 +210,9 @@ echo -e "${GREEN}Scan Complete!${NC}"
 echo -e "${YELLOW}Total devices: $TOTAL_COUNT ${GRAY}(${GREEN}$ACTIVE_COUNT active${GRAY}, ${GRAY}$CACHED_COUNT cached)${NC}"
 echo ""
 echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached (seen recently)${NC}"
+echo ""
+echo -e "${GRAY}Note: This scan shows devices that respond to network probes or are in${NC}"
+echo -e "${GRAY}      ARP cache. Some devices (sleeping phones, privacy-enabled devices)${NC}"
+echo -e "${GRAY}      may not appear. Check your router admin page for complete list.${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
