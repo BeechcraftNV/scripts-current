@@ -1,0 +1,210 @@
+#!/bin/bash
+
+set -e
+
+# Colors for better readability
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+GRAY='\033[0;90m'
+NC='\033[0m'
+
+# Check if running with sudo, re-exec with sudo if not
+if [ "$EUID" -ne 0 ]; then
+    exec sudo "$0" "$@"
+fi
+
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BLUE}                    LAN Device Scanner                         ${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Detect network
+NETWORK=$(ip route | grep default | awk '{print $3}' | cut -d'.' -f1-3)
+if [ -z "$NETWORK" ]; then
+    echo -e "${YELLOW}Could not detect network. Please enter your network (e.g., 192.168.29):${NC}"
+    read NETWORK
+fi
+
+echo -e "${CYAN}Scanning network: ${NETWORK}.0/24${NC}"
+echo -e "${CYAN}This may take 1-2 minutes...${NC}"
+echo ""
+
+# Create temp files
+NMAP_OUTPUT=$(mktemp)
+MDNS_OUTPUT=$(mktemp)
+ARP_OUTPUT=$(mktemp)
+COMBINED_OUTPUT=$(mktemp)
+trap 'rm -f $NMAP_OUTPUT $MDNS_OUTPUT $ARP_OUTPUT $COMBINED_OUTPUT' EXIT
+
+# Run ARP cache check first (shows recently seen devices)
+echo -e "${YELLOW}[1/3] Checking ARP cache for known devices...${NC}"
+ip neigh show | grep -v FAILED | awk '{print $1":"$5}' > "$ARP_OUTPUT"
+
+# Run nmap scan with ARP packets (works better for sleeping devices)
+echo -e "${YELLOW}[2/3] Running network scan (ARP + ping)...${NC}"
+nmap -sn -PR $NETWORK.0/24 2>/dev/null > "$NMAP_OUTPUT"
+
+# Run mDNS scan and deduplicate
+echo -e "${YELLOW}[3/3] Scanning for mDNS/Bonjour devices...${NC}"
+timeout 8 avahi-browse -a -t -r 2>/dev/null | \
+    grep -E "hostname|address" | \
+    awk '/hostname/{h=$3} /address/ && /IPv4/{ip=$3; if (!seen[h":"ip]++) print h ":" ip}' | \
+    sort -u > "$MDNS_OUTPUT"
+
+echo ""
+echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}Devices Found:${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+
+# Build maps
+declare -A mdns_map
+declare -A arp_map
+declare -A all_ips
+
+# Parse mDNS data
+while IFS=: read -r hostname ip; do
+    hostname="${hostname//\[/}"
+    hostname="${hostname//\]/}"
+    mdns_map["$ip"]="$hostname"
+    all_ips["$ip"]=1
+done < "$MDNS_OUTPUT"
+
+# Parse ARP data
+while IFS=: read -r ip mac; do
+    arp_map["$ip"]="$mac"
+    all_ips["$ip"]=1
+done < "$ARP_OUTPUT"
+
+# Parse nmap output and combine with all data
+awk -v network="$NETWORK" '
+/Nmap scan report for/ {
+    hostname = ""
+    ip = ""
+
+    # Extract hostname and IP
+    if ($5 != "") {
+        hostname = $5
+        gsub(/[()]/, "", hostname)
+        ip = $6
+        gsub(/[()]/, "", ip)
+    } else {
+        ip = $5
+    }
+
+    # Store for later processing
+    ips[ip] = hostname
+    ip_order[++count] = ip
+}
+/MAC Address:/ {
+    # Find the most recent IP for this MAC
+    for (i=count; i>=1; i--) {
+        ip = ip_order[i]
+        if (!(ip in mac_map)) {
+            mac = $3
+            vendor = ""
+            for (j=4; j<=NF; j++) {
+                if (vendor == "") vendor = $j
+                else vendor = vendor " " $j
+            }
+            gsub(/[()]/, "", vendor)
+            mac_map[ip] = mac
+            vendor_map[ip] = vendor
+            break
+        }
+    }
+}
+/Host is up/ {
+    # Mark this IP as currently active
+    for (i=count; i>=1; i--) {
+        ip = ip_order[i]
+        if (!(ip in active_map)) {
+            active_map[ip] = 1
+            break
+        }
+    }
+}
+END {
+    for (ip in ips) {
+        status = (ip in active_map) ? "UP" : "DOWN"
+        mac = (ip in mac_map) ? mac_map[ip] : ""
+        vendor = (ip in vendor_map) ? vendor_map[ip] : ""
+        hostname = ips[ip]
+        printf "%s|%s|%s|%s|%s\n", ip, hostname, mac, vendor, status
+    }
+}
+' "$NMAP_OUTPUT" > "$COMBINED_OUTPUT"
+
+# Add ARP-only and mDNS-only devices
+for ip in "${!all_ips[@]}"; do
+    if ! grep -q "^$ip|" "$COMBINED_OUTPUT"; then
+        hostname="${mdns_map[$ip]:-}"
+        mac="${arp_map[$ip]:-}"
+        # Try to get vendor from MAC using nmap's database
+        vendor=""
+        if [ -n "$mac" ]; then
+            vendor=$(grep -i "^${mac:0:8}" /usr/share/nmap/nmap-mac-prefixes 2>/dev/null | cut -f2 || echo "")
+        fi
+        echo "$ip|$hostname|$mac|$vendor|CACHED" >> "$COMBINED_OUTPUT"
+    fi
+done
+
+# Sort and display results
+sort -t. -k1,1n -k2,2n -k3,3n -k4,4n "$COMBINED_OUTPUT" > "$COMBINED_OUTPUT.sorted"
+
+ACTIVE_COUNT=0
+CACHED_COUNT=0
+TOTAL_COUNT=0
+
+while IFS='|' read -r ip hostname mac vendor status; do
+    # Skip empty lines
+    [ -z "$ip" ] && continue
+
+    TOTAL_COUNT=$((TOTAL_COUNT + 1))
+
+    # Get mDNS hostname if not already set
+    if [ -z "$hostname" ] || [ "$hostname" = "$ip" ]; then
+        if [ -n "${mdns_map[$ip]+isset}" ]; then
+            hostname="${mdns_map[$ip]}"
+        fi
+    fi
+
+    # Status indicator
+    if [ "$status" = "UP" ]; then
+        ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
+        status_icon="${GREEN}●${NC}"
+    elif [ "$status" = "CACHED" ]; then
+        CACHED_COUNT=$((CACHED_COUNT + 1))
+        status_icon="${GRAY}○${NC}"
+    else
+        status_icon="${YELLOW}◐${NC}"
+    fi
+
+    # Display IP and hostname
+    printf "${CYAN}%-3s${NC} %b ${GREEN}%-15s${NC}" "$TOTAL_COUNT." "$status_icon" "$ip"
+
+    if [ -n "$hostname" ] && [ "$hostname" != "$ip" ]; then
+        printf "│ ${YELLOW}%-30s${NC}" "$hostname"
+    else
+        printf "│ ${GRAY}%-30s${NC}" "(unknown)"
+    fi
+
+    # Display vendor/device type
+    if [ -n "$vendor" ]; then
+        printf "│ ${BLUE}%s${NC}" "$vendor"
+    fi
+
+    echo ""
+done < "$COMBINED_OUTPUT.sorted"
+
+echo ""
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}Scan Complete!${NC}"
+echo -e "${YELLOW}Total devices: $TOTAL_COUNT ${GRAY}(${GREEN}$ACTIVE_COUNT active${GRAY}, ${GRAY}$CACHED_COUNT cached)${NC}"
+echo ""
+echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached (seen recently)${NC}"
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
