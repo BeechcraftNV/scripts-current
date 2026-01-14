@@ -1,8 +1,8 @@
 #!/bin/bash
 # Save as ~/.local/bin/update-all
-# Comprehensive system update script with detailed reporting
+# Comprehensive system update script with Gemini pre-fetch and AI tool reporting
 
-# Exit on error, but we'll handle specific cases where errors are expected
+# Exit on error
 set -e
 
 # Color codes for output
@@ -10,13 +10,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Arrays to track what happened
 declare -a UPDATED_ITEMS=()
 declare -a SKIPPED_ITEMS=()
 declare -a FAILED_ITEMS=()
 declare -a AVAILABLE_NOT_RUN=()
+declare -a AI_TOOLS=()
 
 # Temporary files for capturing output
 APT_OUTPUT=$(mktemp)
@@ -24,12 +25,22 @@ FLATPAK_SYS_OUTPUT=$(mktemp)
 FLATPAK_USER_OUTPUT=$(mktemp)
 CLEANUP_OUTPUT=$(mktemp)
 
+# Clear the display
+clear
+
 # Cleanup temp files on exit
 trap 'rm -f "$APT_OUTPUT" "$FLATPAK_SYS_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"' EXIT
 
+# --- SILENT BACKGROUND UPDATES ---
+# Pre-warm the Gemini CLI cache in the background 
+if command -v npx &> /dev/null; then
+    echo "Checking for Gemini CLI updates in background..."
+    npx @google/gemini-cli@latest --version > /dev/null 2>&1 &
+    GEMINI_PID=$!
+fi
+
 echo "=== Updating APT packages ==="
 if sudo apt update 2>&1 | tee "$APT_OUTPUT"; then
-    # Capture what will be upgraded before doing it
     UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "Listing..." | wc -l)
     
     if [ "$UPGRADABLE" -gt 0 ]; then
@@ -70,7 +81,6 @@ else
 fi
 
 echo -e "\n=== Cleaning up unused packages and runtimes ==="
-# Remove orphaned APT packages
 AUTOREMOVE_COUNT=$(sudo apt autoremove --dry-run 2>/dev/null | grep -c "^Remv" || echo "0")
 if [ "$AUTOREMOVE_COUNT" -gt 0 ]; then
     sudo apt autoremove -y
@@ -79,7 +89,6 @@ else
     SKIPPED_ITEMS+=("APT cleanup: No orphaned packages")
 fi
 
-# Perform Flatpak repair and remove unused runtimes/SDKs
 echo "Running flatpak repair..."
 flatpak repair 2>&1 | tee -a "$CLEANUP_OUTPUT"
 
@@ -91,80 +100,26 @@ else
     SKIPPED_ITEMS+=("Flatpak cleanup: No unused runtimes")
 fi
 
-echo -e "\n=== Checking for EOL runtimes (example: 23.08) ==="
-# Don't let this fail the script
-set +e
-EOL_RUNTIMES=$(flatpak list --runtime | grep "23.08" || true)
-set -e
-
-if [ -n "$EOL_RUNTIMES" ]; then
-    echo -e "${YELLOW}⚠️  Found EOL runtimes:${NC}"
-    echo "$EOL_RUNTIMES"
-    SKIPPED_ITEMS+=("EOL Flatpak runtimes detected (manual intervention needed)")
-else
-    echo "No EOL runtimes found."
+# Check for other update sources
+echo -e "\n=== Checking AI & Development Tools ==="
+if [ -n "$GEMINI_PID" ]; then
+    wait $GEMINI_PID
+    AI_TOOLS+=("Gemini CLI: Background update check/download complete")
 fi
 
-# Check for System76 firmware (Pop!_OS specific)
-echo -e "\n=== Checking System76 Firmware ==="
-if command -v system76-firmware-manager &> /dev/null; then
-    if system76-firmware-manager --check 2>&1 | grep -qi "up-to-date\|no updates"; then
-        SKIPPED_ITEMS+=("System76 Firmware: Up to date")
-    else
-        AVAILABLE_NOT_RUN+=("System76 firmware updates available (run: system76-firmware-manager)")
-    fi
-else
-    echo "System76 firmware manager not found (not a System76 device or not installed)"
-fi
-
-# Check for other update sources that weren't handled
-echo -e "\n=== Checking for other update sources ==="
-
-# Check for Docker containers (but don't update them automatically)
 if command -v docker &> /dev/null; then
     OUTDATED_IMAGES=$(docker images --filter "dangling=true" -q 2>/dev/null | wc -l || echo "0")
     if [ "$OUTDATED_IMAGES" -gt 0 ]; then
-        AVAILABLE_NOT_RUN+=("Docker: $OUTDATED_IMAGES dangling images (not auto-updated)")
-    fi
-fi
-
-# Check for pip packages
-if command -v pip &> /dev/null; then
-    PIP_OUTDATED=$(pip list --outdated 2>/dev/null | tail -n +3 | wc -l || echo "0")
-    if [ "$PIP_OUTDATED" -gt 0 ]; then
-        AVAILABLE_NOT_RUN+=("pip: $PIP_OUTDATED packages outdated (not auto-updated)")
-    fi
-fi
-
-# Check for pipx packages
-if command -v pipx &> /dev/null; then
-    PIPX_COUNT=$(pipx list 2>/dev/null | grep -c "package" || echo "0")
-    if [ "$PIPX_COUNT" -gt 0 ]; then
-        AVAILABLE_NOT_RUN+=("pipx: $PIPX_COUNT packages (not auto-updated)")
-    fi
-fi
-
-# Check for Rust/Cargo
-if command -v rustup &> /dev/null; then
-    AVAILABLE_NOT_RUN+=("rustup/cargo packages (not auto-updated)")
-fi
-
-# Check for npm global packages
-if command -v npm &> /dev/null; then
-    NPM_OUTDATED=$(npm outdated -g --depth=0 2>/dev/null | tail -n +2 | wc -l || echo "0")
-    if [ "$NPM_OUTDATED" -gt 0 ]; then
-        AVAILABLE_NOT_RUN+=("npm: $NPM_OUTDATED global packages outdated (not auto-updated)")
+        AI_TOOLS+=("Docker: $OUTDATED_IMAGES dangling images available for cleanup")
     fi
 fi
 
 # Check for firmware updates
 if command -v fwupdmgr &> /dev/null; then
-    if ! fwupdmgr refresh &>/dev/null; then
-        AVAILABLE_NOT_RUN+=("Firmware updates check failed or not supported")
-    elif fwupdmgr get-updates 2>&1 | grep -q "No updates available"; then
-        SKIPPED_ITEMS+=("Firmware: No updates available")
-    else
-        AVAILABLE_NOT_RUN+=("Firmware updates available (run: fwupdmgr update)")
+    if fwupdmgr refresh &>/dev/null; then
+        if ! fwupdmgr get-updates 2>&1 | grep -q "No updates available"; then
+            AVAILABLE_NOT_RUN+=("Firmware updates available (run: fwupdmgr update)")
+        fi
     fi
 fi
 
@@ -176,94 +131,52 @@ echo "╔═══════════════════════�
 echo "║                     UPDATE SUMMARY REPORT                      ║"
 echo "╚════════════════════════════════════════════════════════════════╝"
 
-echo -e "\n${GREEN}✅ UPDATED:${NC}"
+echo -e "\n${GREEN}✅ UPDATED (Core System):${NC}"
 if [ "${#UPDATED_ITEMS[@]}" -eq 0 ]; then
     echo "  • Nothing was updated"
 else
-    for item in "${UPDATED_ITEMS[@]}"; do
-        echo "  • $item"
-    done
+    for item in "${UPDATED_ITEMS[@]}"; do echo "  • $item"; done
+fi
+
+echo -e "\n${BLUE}🤖 AI & DEVELOPMENT TOOLS:${NC}"
+if [ "${#AI_TOOLS[@]}" -eq 0 ]; then
+    echo "  • No tool updates detected"
+else
+    for tool in "${AI_TOOLS[@]}"; do echo "  • $tool"; done
 fi
 
 echo -e "\n${BLUE}⏭️  SKIPPED (Already Current):${NC}"
 if [ "${#SKIPPED_ITEMS[@]}" -eq 0 ]; then
     echo "  • No items skipped"
 else
-    for item in "${SKIPPED_ITEMS[@]}"; do
-        echo "  • $item"
-    done
-fi
-
-if [ "${#FAILED_ITEMS[@]}" -gt 0 ]; then
-    echo -e "\n${RED}❌ FAILED:${NC}"
-    for item in "${FAILED_ITEMS[@]}"; do
-        echo "  • $item"
-    done
+    for item in "${SKIPPED_ITEMS[@]}"; do echo "  • $item"; done
 fi
 
 if [ "${#AVAILABLE_NOT_RUN[@]}" -gt 0 ]; then
-    echo -e "\n${YELLOW}⚠️  AVAILABLE BUT NOT AUTO-UPDATED:${NC}"
-    for item in "${AVAILABLE_NOT_RUN[@]}"; do
-        echo "  • $item"
-    done
+    echo -e "\n${YELLOW}⚠️  MANUAL UPDATES REQUIRED:${NC}"
+    for item in "${AVAILABLE_NOT_RUN[@]}"; do echo "  • $item"; done
 fi
 
 # Impact assessment
 echo -e "\n${BLUE}📊 SYSTEM IMPACT ASSESSMENT:${NC}"
-echo ""
-
 TOTAL_UPDATED=$(echo "${UPDATED_ITEMS[@]}" | grep -o "[0-9]\+" | awk '{s+=$1} END {print s+0}' || echo "0")
 
 if [ "$TOTAL_UPDATED" -eq 0 ]; then
     echo "  ⚡ Impact: NONE - System was already fully updated"
-    echo "  🔄 Reboot needed: No"
 elif [ "$TOTAL_UPDATED" -lt 10 ]; then
     echo "  ⚡ Impact: LOW - Minor updates applied"
-    echo "  🔄 Reboot needed: Unlikely, unless kernel/systemd updated"
-    echo "     (Check: uname -r vs. dpkg -l | grep linux-image)"
 else
     echo "  ⚡ Impact: MODERATE - Significant updates applied"
-    echo "  🔄 Reboot needed: Recommended if kernel/graphics/systemd updated"
-    echo "     (Check: uname -r vs. dpkg -l | grep linux-image)"
 fi
 
-# Check if kernel was updated
-if grep -q "linux-image\|linux-headers" "$APT_OUTPUT" 2>/dev/null; then
-    echo -e "\n  ${YELLOW}⚠️  KERNEL UPDATE DETECTED - Reboot required to use new kernel${NC}"
-fi
-
-# Compare running kernel with installed kernel
-echo -e "\n${BLUE}🔍 KERNEL VERSION CHECK:${NC}"
+# Kernel check
 RUNNING_KERNEL=$(uname -r)
 INSTALLED_KERNEL=$(dpkg -l | grep "^ii.*linux-image-[0-9]" | grep -v "linux-image-extra" | sort -V | tail -1 | awk '{print $2}' | sed 's/linux-image-//')
 
-echo "  • Currently running: $RUNNING_KERNEL"
-echo "  • Latest installed:  $INSTALLED_KERNEL"
-
 if [ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]; then
-    echo -e "  ${RED}✖ MISMATCH DETECTED${NC}"
-    echo -e "  ${YELLOW}⚠️  REBOOT REQUIRED to load the new kernel${NC}"
+    echo -e "  ${RED}✖ KERNEL MISMATCH: REBOOT REQUIRED${NC}"
 else
-    echo -e "  ${GREEN}✓ Running the latest kernel${NC}"
+    echo -e "  ${GREEN}✓ Running the latest kernel ($RUNNING_KERNEL)${NC}"
 fi
-
-# Check if systemd or critical services were updated
-if grep -q "systemd\|dbus\|udev" "$APT_OUTPUT" 2>/dev/null; then
-    echo -e "\n  ${YELLOW}⚠️  SYSTEM SERVICE UPDATES - Reboot recommended${NC}"
-fi
-
-echo -e "\n${BLUE}🔍 WHAT WASN'T UPDATED:${NC}"
-echo "  • Docker containers (manual: docker compose pull && docker compose up -d)"
-echo "  • Python packages (manual: pip list --outdated or pipx upgrade-all)"
-echo "  • Rust toolchain (manual: rustup update)"
-echo "  • npm global packages (manual: npm update -g)"
-echo "  • Manual downloads/AppImages"
-echo "  • Git repositories (manual: git pull in each repo)"
-
-echo -e "\n${BLUE}💡 RECOMMENDATIONS:${NC}"
-echo "  • If Flatpaks were updated: Some apps may need restart to use new versions"
-echo "  • For Docker services: Consider docker compose pull in your compose directories"
-echo "  • Check running services: systemctl --failed"
-echo "  • Disk space available: $(df -h / | tail -1 | awk '{print $4}') on root partition"
 
 echo -e "\n✅ Update and Cleanup Complete."

@@ -21,25 +21,21 @@ update-all
 - Removes orphaned APT packages (autoremove)
 - Cleans unused Flatpak runtimes/SDKs
 
-**What it reports (but doesn't auto-update):**
+**What it reports:**
+- Gemini CLI update status
 - Docker dangling images
-- pip/pipx packages
-- Rust/Cargo packages
-- npm global packages
 - Firmware updates (fwupdmgr)
-- System76 firmware (if applicable)
 
 **Key Features:**
+- Background Gemini CLI update pre-fetch
 - Color-coded comprehensive summary report
 - Kernel version comparison (running vs. installed) to detect reboot needs
-- System service update detection (systemd, dbus, udev)
-- EOL runtime detection (e.g., Flatpak 23.08)
-- Disk space reporting
-- Intelligent reboot recommendations
+- Streamlined impact assessment
 
 **Requirements:**
 - sudo access for APT and system Flatpak operations
 - Bash shell
+- `npx` (optional, for Gemini CLI updates)
 
 ---
 
