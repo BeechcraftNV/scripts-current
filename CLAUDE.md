@@ -16,7 +16,8 @@ This is a personal utility scripts directory (`~/.local/bin`) containing custom 
 ### What's Tracked vs. Ignored
 
 **Tracked (committed to git):**
-- Bash scripts (update-all, check-systemd-errors, check-system-errors-glam, sync-scripts, update-glam)
+- Bash scripts (update-all, check-systemd-errors, check-system-errors-glam, sync-scripts, update-glam, lan-scanner, format-nmap)
+- Python scripts (sort_raindrops)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 
 **Ignored (see .gitignore):**
@@ -39,19 +40,16 @@ Comprehensive system update script that handles multiple package managers with d
 - Removes orphaned APT packages (autoremove)
 - Cleans unused Flatpak runtimes/SDKs
 
-**What it reports (but doesn't auto-update):**
+**What it reports:**
+- Gemini CLI update status
 - Docker dangling images
-- pip/pipx packages
-- Rust/Cargo packages
-- npm global packages
 - Firmware updates (fwupdmgr)
-- System76 firmware (if applicable)
 
 **Key features:**
+- Background Gemini CLI update pre-fetch
 - Kernel version comparison (running vs. installed) to detect reboot needs
-- System service update detection (systemd, dbus, udev)
 - Color-coded comprehensive summary report
-- Disk space reporting
+- Streamlined impact assessment
 
 ### update-glam
 Modern, interactive version of `update-all` using Charm CLI tools (gum/glow).
@@ -103,6 +101,20 @@ Helper script to sync the repository with GitHub before editing.
 - Shows current branch and latest commit
 
 **Use case:** Run before starting an editing session to ensure working with latest code.
+
+### sort_raindrops
+Python script to sort Raindrop.io bookmarks and collections.
+
+**Usage:** `sort_raindrops`
+
+**What it does:**
+- Sorts all collections alphabetically by title
+- Within each collection, sorts bookmarks by date (oldest first)
+- Updates sort order via Raindrop.io API
+
+**Requirements:**
+- Python 3 with `requests` library
+- `RAINDROP_TOKEN` environment variable set with API token
 
 ## Git Workflow
 
