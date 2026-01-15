@@ -182,6 +182,34 @@ format-nmap
 - `nmap` - Network scanning tool
 - sudo access
 
+---
+
+### sort_raindrops
+
+Python script to sort Raindrop.io bookmarks and collections.
+
+**Usage:**
+```bash
+sort_raindrops
+```
+
+**What it does:**
+- Sorts all collections alphabetically by title
+- Within each collection, sorts bookmarks by date (oldest first)
+- Updates sort order via Raindrop.io API
+
+**Setup:**
+1. Get your API token from [Raindrop.io settings](https://app.raindrop.io/settings/integrations)
+2. Add to your shell profile:
+   ```bash
+   export RAINDROP_TOKEN='your-token-here'
+   ```
+
+**Requirements:**
+- Python 3
+- `requests` library (`pip install requests`)
+- `RAINDROP_TOKEN` environment variable
+
 ## Installation
 
 ### Clone the Repository
@@ -234,6 +262,7 @@ chmod +x ~/.local/bin/check-systemd-errors
 ├── check-systemd-errors-howto.md     # Usage guide
 ├── format-nmap                       # nmap output formatter
 ├── lan-scanner                       # Comprehensive LAN device scanner
+├── sort_raindrops                    # Raindrop.io bookmark sorter
 ├── sync-scripts                      # Repository sync helper
 ├── update-all                        # System update script
 └── update-glam                       # Interactive update script (gum/glow)
@@ -243,6 +272,7 @@ chmod +x ~/.local/bin/check-systemd-errors
 
 **Committed to repository:**
 - Shell scripts (update-all, update-glam, check-systemd-errors, sync-scripts, lan-scanner, format-nmap)
+- Python scripts (sort_raindrops)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 - Configuration (.gitignore)
 
