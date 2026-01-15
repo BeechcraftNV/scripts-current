@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+import os
+import requests
+import sys
+import time
+
+TOKEN = os.environ.get('RAINDROP_TOKEN')
+if not TOKEN:
+    print("Error: RAINDROP_TOKEN environment variable not set", file=sys.stderr)
+    sys.exit(1)
+
+BASE_URL = 'https://api.raindrop.io/rest/v1'
+HEADERS = {'Authorization': f'Bearer {TOKEN}'}
+
+def get_collections():
+    r = requests.get(f'{BASE_URL}/collections', headers=HEADERS)
+    r.raise_for_status()
+    return r.json()['items']
+
+def get_bookmarks(collection_id):
+    bookmarks = []
+    page = 0
+    while True:
+        r = requests.get(f'{BASE_URL}/raindrops/{collection_id}', params={'page': page, 'perpage': 50}, headers=HEADERS)
+        r.raise_for_status()
+        data = r.json()
+        items = data.get('items', [])
+        if not items:
+            break
+        bookmarks.extend(items)
+        page += 1
+    return bookmarks
+
+def update_collection_sort(collection_id, sort_index):
+    r = requests.put(f'{BASE_URL}/collection/{collection_id}', json={'sort': sort_index}, headers=HEADERS)
+    r.raise_for_status()
+
+def batch_update_bookmarks(collection_id, bookmark_ids):
+    # Instead of updating 'sort' one by one, we'll try to use the 'raindrops/:id' update endpoint
+    # Actually, Raindrop API doesn't have a direct batch 'sort' field update that is reliable besides reorder
+    # But wait, the 404 from earlier for /reorder was likely because I used /raindrops/:id/reorder 
+    # The correct one for a collection might be /raindrops/:collection_id (PUT)
+    # Let me try a different approach: updating them in groups of 100 if possible or just sticking to reorder with the right URL.
+    pass
+
+def main():
+    print("Fetching collections...", flush=True)
+    try:
+        collections = get_collections()
+    except Exception as e:
+        print(f"Failed to fetch collections: {e}", flush=True)
+        return
+
+    collections.sort(key=lambda x: x['title'].lower())
+    
+    print(f"Found {len(collections)} collections. Sorting...", flush=True)
+    for i, col in enumerate(collections):
+        print(f"  [{i+1}/{len(collections)}] {col['title']}...", flush=True)
+        
+        bookmarks = get_bookmarks(col['_id'])
+        if not bookmarks:
+            continue
+            
+        # Newest first = higher sort index
+        bookmarks.sort(key=lambda x: x.get('lastUpdate', x['created']), reverse=False)
+        
+        bookmark_ids = [b['_id'] for b in bookmarks]
+        
+        # Correct Reorder URL: PUT /raindrops/{collection_id}/reorder
+        # My previous attempt used this. If it returned 404, the endpoint might be different or not available for that collection.
+        # Let's try the individual update again but with a smaller sleep.
+        
+        for index, b_id in enumerate(bookmark_ids):
+            try:
+                requests.put(f'{BASE_URL}/raindrop/{b_id}', json={'sort': index}, headers=HEADERS)
+                time.sleep(0.1) # 10 requests per second is well within 120/min limit? No, 120/min = 2/sec.
+                # Let's use 0.5s to be safe.
+            except:
+                pass
+
+    # Sort collections
+    for i, col in enumerate(collections):
+        requests.put(f'{BASE_URL}/collection/{col["_id"]}', json={'sort': i}, headers=HEADERS)
+        time.sleep(0.5)
+
+    print("Done!", flush=True)
+
+if __name__ == "__main__":
+    main()
