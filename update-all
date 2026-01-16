@@ -81,7 +81,7 @@ else
 fi
 
 echo -e "\n=== Cleaning up unused packages and runtimes ==="
-AUTOREMOVE_COUNT=$(sudo apt autoremove --dry-run 2>/dev/null | grep -c "^Remv" || echo "0")
+AUTOREMOVE_COUNT=$(sudo apt autoremove --dry-run 2>/dev/null | grep -c "^Remv" 2>/dev/null) || AUTOREMOVE_COUNT=0
 if [ "$AUTOREMOVE_COUNT" -gt 0 ]; then
     sudo apt autoremove -y
     UPDATED_ITEMS+=("APT cleanup: Removed $AUTOREMOVE_COUNT orphaned packages")
@@ -89,13 +89,22 @@ else
     SKIPPED_ITEMS+=("APT cleanup: No orphaned packages")
 fi
 
-echo "Running flatpak repair..."
-flatpak repair 2>&1 | tee -a "$CLEANUP_OUTPUT"
+echo "Running flatpak repair (system)..."
+sudo flatpak repair --system 2>&1 | tee -a "$CLEANUP_OUTPUT"
+echo "Running flatpak repair (user)..."
+flatpak repair --user 2>&1 | tee -a "$CLEANUP_OUTPUT"
 
-UNUSED_FLATPAKS=$(flatpak uninstall --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" || echo "0")
-if [ "$UNUSED_FLATPAKS" -gt 0 ]; then
-    flatpak uninstall --unused -y
-    UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_FLATPAKS unused runtimes/SDKs")
+UNUSED_SYS_FLATPAKS=$(sudo flatpak uninstall --system --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null) || UNUSED_SYS_FLATPAKS=0
+UNUSED_USER_FLATPAKS=$(flatpak uninstall --user --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null) || UNUSED_USER_FLATPAKS=0
+
+if [ "$UNUSED_SYS_FLATPAKS" -gt 0 ] || [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
+    if [ "$UNUSED_SYS_FLATPAKS" -gt 0 ]; then
+        sudo flatpak uninstall --system --unused -y
+    fi
+    if [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
+        flatpak uninstall --user --unused -y
+    fi
+    UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_SYS_FLATPAKS system, $UNUSED_USER_FLATPAKS user unused runtimes/SDKs")
 else
     SKIPPED_ITEMS+=("Flatpak cleanup: No unused runtimes")
 fi
