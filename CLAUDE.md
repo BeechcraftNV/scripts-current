@@ -16,7 +16,7 @@ This is a personal utility scripts directory (`~/.local/bin`) containing custom 
 ### What's Tracked vs. Ignored
 
 **Tracked (committed to git):**
-- Bash scripts (update-all, check-systemd-errors, check-system-errors-glam, sync-scripts, update-glam, lan-scanner, format-nmap)
+- Bash scripts (update-all, check-systemd-errors, check-system-errors-glam, sync-scripts, lan-scanner, format-nmap)
 - Python scripts (sort_raindrops)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 
@@ -50,16 +50,6 @@ Comprehensive system update script that handles multiple package managers with d
 - Kernel version comparison (running vs. installed) to detect reboot needs
 - Color-coded comprehensive summary report
 - Streamlined impact assessment
-
-### update-glam
-Modern, interactive version of `update-all` using Charm CLI tools (gum/glow).
-
-**Dependencies:** Requires `gum` and `glow` installed
-**Features:**
-- Interactive confirmation prompts
-- Spinner animations for long-running operations
-- Markdown-formatted reports via glow
-- Interactive post-update menu
 
 ### check-systemd-errors
 Reviews recent systemd logs for errors and provides a summary.
@@ -222,12 +212,6 @@ All bash scripts follow consistent patterns:
 - Final summary report with categorized results
 - Impact assessment and reboot recommendations
 - Version comparisons (running vs. installed kernel)
-
-**update-glam style:** Interactive UX with:
-- `gum spin` for progress indicators
-- `gum confirm` for user prompts
-- `glow` for rendering markdown reports
-- `gum choose` for menu selections
 
 ### Git Integration
 

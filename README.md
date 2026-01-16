@@ -39,32 +39,6 @@ update-all
 
 ---
 
-### update-glam
-
-Modern, interactive version of `update-all` using Charm CLI tools (gum/glow).
-
-**Usage:**
-```bash
-update-glam
-```
-
-**Dependencies:**
-- `gum` - Interactive CLI components
-- `glow` - Markdown renderer
-
-**Features:**
-- Interactive confirmation prompts for updates
-- Spinner animations for long-running operations
-- Markdown-formatted reports rendered with glow
-- Interactive post-update menu for optional maintenance tasks
-- Kernel version checking with visual warnings
-
-**What it updates:**
-- APT packages (with confirmation)
-- System Flatpak packages
-
----
-
 ### check-systemd-errors
 
 Reviews recent systemd logs for errors and provides a summary.
@@ -264,14 +238,13 @@ chmod +x ~/.local/bin/check-systemd-errors
 ├── lan-scanner                       # Comprehensive LAN device scanner
 ├── sort_raindrops                    # Raindrop.io bookmark sorter
 ├── sync-scripts                      # Repository sync helper
-├── update-all                        # System update script
-└── update-glam                       # Interactive update script (gum/glow)
+└── update-all                        # System update script
 ```
 
 ### What's Tracked in Git
 
 **Committed to repository:**
-- Shell scripts (update-all, update-glam, check-systemd-errors, sync-scripts, lan-scanner, format-nmap)
+- Shell scripts (update-all, check-systemd-errors, sync-scripts, lan-scanner, format-nmap)
 - Python scripts (sort_raindrops)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 - Configuration (.gitignore)
