@@ -36,9 +36,9 @@ Comprehensive system update script that handles multiple package managers with d
 
 **What it updates automatically:**
 - APT packages (apt update && apt full-upgrade)
-- System and user Flatpak packages
+- User Flatpak packages (user installation only)
 - Removes orphaned APT packages (autoremove)
-- Cleans unused Flatpak runtimes/SDKs
+- Cleans unused user Flatpak runtimes/SDKs
 
 **What it reports:**
 - Gemini CLI update status
