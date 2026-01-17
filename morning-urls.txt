@@ -1,10 +1,18 @@
 # Morning routine - edit anytime
 https://youtube.com
-https://weather.com
+https://forecast.weather.gov/MapClick.php?lat=39.421227&lon=-118.718401
 https://calendar.google.com
 
-# Work stuff
-https://192.168.29.43:8989
+http://lmdeserver:3000
 
-# News
-https://news.ycombinator.com
+pihole.lan/admin
+nzbhydra2.lan/
+radarr.lan/
+sonarr.lan/
+
+https://mail.google.com
+https://instagram.com
+
+https://lasvegas.lib.overdrive.com
+
+# https://naturalreaders.com

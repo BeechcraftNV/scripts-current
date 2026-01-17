@@ -21,7 +21,6 @@ declare -a AI_TOOLS=()
 
 # Temporary files for capturing output
 APT_OUTPUT=$(mktemp)
-FLATPAK_SYS_OUTPUT=$(mktemp)
 FLATPAK_USER_OUTPUT=$(mktemp)
 CLEANUP_OUTPUT=$(mktemp)
 
@@ -29,7 +28,7 @@ CLEANUP_OUTPUT=$(mktemp)
 clear
 
 # Cleanup temp files on exit
-trap 'rm -f "$APT_OUTPUT" "$FLATPAK_SYS_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"' EXIT
+trap 'rm -f "$APT_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"' EXIT
 
 # --- SILENT BACKGROUND UPDATES ---
 # Pre-warm the Gemini CLI cache in the background 
@@ -54,19 +53,6 @@ else
     FAILED_ITEMS+=("APT: Failed to update package lists")
 fi
 
-echo -e "\n=== Updating System Flatpaks ==="
-sudo flatpak update -y 2>&1 | tee "$FLATPAK_SYS_OUTPUT"
-if grep -q "Nothing to do" "$FLATPAK_SYS_OUTPUT"; then
-    SKIPPED_ITEMS+=("System Flatpak: Already up to date")
-else
-    SYS_UPDATES=$(grep -c "Installing\|Updating" "$FLATPAK_SYS_OUTPUT" || true)
-    if [ "$SYS_UPDATES" -gt 0 ]; then
-        UPDATED_ITEMS+=("System Flatpak: $SYS_UPDATES packages updated")
-    else
-        UPDATED_ITEMS+=("System Flatpak: Updates applied")
-    fi
-fi
-
 echo -e "\n=== Updating User Flatpaks ==="
 flatpak update -y 2>&1 | tee "$FLATPAK_USER_OUTPUT"
 if grep -q "Nothing to do" "$FLATPAK_USER_OUTPUT"; then
@@ -89,22 +75,14 @@ else
     SKIPPED_ITEMS+=("APT cleanup: No orphaned packages")
 fi
 
-echo "Running flatpak repair (system)..."
-sudo flatpak repair --system 2>&1 | tee -a "$CLEANUP_OUTPUT"
 echo "Running flatpak repair (user)..."
 flatpak repair --user 2>&1 | tee -a "$CLEANUP_OUTPUT"
 
-UNUSED_SYS_FLATPAKS=$(sudo flatpak uninstall --system --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null) || UNUSED_SYS_FLATPAKS=0
 UNUSED_USER_FLATPAKS=$(flatpak uninstall --user --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null) || UNUSED_USER_FLATPAKS=0
 
-if [ "$UNUSED_SYS_FLATPAKS" -gt 0 ] || [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
-    if [ "$UNUSED_SYS_FLATPAKS" -gt 0 ]; then
-        sudo flatpak uninstall --system --unused -y
-    fi
-    if [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
-        flatpak uninstall --user --unused -y
-    fi
-    UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_SYS_FLATPAKS system, $UNUSED_USER_FLATPAKS user unused runtimes/SDKs")
+if [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
+    flatpak uninstall --user --unused -y
+    UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_USER_FLATPAKS unused runtimes/SDKs")
 else
     SKIPPED_ITEMS+=("Flatpak cleanup: No unused runtimes")
 fi
