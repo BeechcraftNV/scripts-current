@@ -13,7 +13,7 @@ The directory serves as a central hub for custom CLI tools. It contains:
 ### [update-all](./update-all)
 A comprehensive system maintenance script that automates:
 - **APT Updates**: Full-upgrade and autoremove.
-- **Flatpak Updates**: System and user-level package updates and cleanup.
+- **Flatpak Updates**: User-level package updates and cleanup.
 - **Firmware Checks**: Integration with `system76-firmware-manager` and `fwupdmgr`.
 - **System Health**: Checks for EOL runtimes and reports on Docker, pip, and npm status.
 - **Reboot Detection**: Compares running vs. installed kernel versions and identifies critical system service updates (systemd, dbus, udev) to recommend reboots.
