@@ -17,9 +17,9 @@ update-all
 
 **What it updates automatically:**
 - APT packages (apt update && apt full-upgrade)
-- System and user Flatpak packages
+- User Flatpak packages (user installation only)
 - Removes orphaned APT packages (autoremove)
-- Cleans unused Flatpak runtimes/SDKs
+- Cleans unused user Flatpak runtimes/SDKs
 
 **What it reports:**
 - Gemini CLI update status
@@ -33,7 +33,7 @@ update-all
 - Streamlined impact assessment
 
 **Requirements:**
-- sudo access for APT and system Flatpak operations
+- sudo access for APT operations
 - Bash shell
 - `npx` (optional, for Gemini CLI updates)
 
