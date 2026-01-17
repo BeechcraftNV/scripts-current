@@ -1,0 +1,21 @@
+#!/bin/bash
+set -eu
+
+# Open morning routine URLs in Brave browser
+# URLs are read from ~/morning-urls.txt
+
+SCRIPT_DIR="$(dirname "$0")"
+URL_FILE="$SCRIPT_DIR/morning-urls.txt"
+
+if [[ ! -f "$URL_FILE" ]]; then
+    echo "Error: $URL_FILE not found"
+    exit 1
+fi
+
+while IFS= read -r url || [[ -n "$url" ]]; do
+    [[ "$url" =~ ^# ]] && continue  # Skip comments
+    [[ -z "$url" ]] && continue     # Skip blank lines
+    brave-browser "$url" &>/dev/null &
+done < "$URL_FILE"
+
+disown -a  # Detach all background jobs for clean exit

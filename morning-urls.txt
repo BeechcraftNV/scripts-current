@@ -1,0 +1,10 @@
+# Morning routine - edit anytime
+https://youtube.com
+https://weather.com
+https://calendar.google.com
+
+# Work stuff
+https://192.168.29.43:8989
+
+# News
+https://news.ycombinator.com
