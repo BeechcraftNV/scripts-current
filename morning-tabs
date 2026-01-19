@@ -16,6 +16,7 @@ while IFS= read -r url || [[ -n "$url" ]]; do
     [[ "$url" =~ ^# ]] && continue  # Skip comments
     [[ -z "$url" ]] && continue     # Skip blank lines
     brave-browser "$url" &>/dev/null &
+    sleep 0.3  # Brief delay to preserve tab order
 done < "$URL_FILE"
 
 disown -a  # Detach all background jobs for clean exit
