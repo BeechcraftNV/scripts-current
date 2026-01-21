@@ -1,7 +1,10 @@
 # Morning routine - edit anytime
+https://www.gocomics.com/profile/beechcraftnv/comics/187268
 https://youtube.com
 https://forecast.weather.gov/MapClick.php?lat=39.421227&lon=-118.718401
 https://calendar.google.com
+https://mail.google.com/mail/u/0/#inbox
+https://mail.proton.me/u/0/inbox
 
 http://lmdeserver:3000
 
@@ -10,9 +13,6 @@ nzbhydra2.lan/
 radarr.lan/
 sonarr.lan/
 
-https://mail.google.com
 https://instagram.com
 
 https://lasvegas.lib.overdrive.com
-
-# https://naturalreaders.com
