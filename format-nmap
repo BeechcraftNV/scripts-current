@@ -1,18 +1,29 @@
 #!/bin/bash
 
-echo "=========================================="
-echo "Network Scan Results"
-echo "Network: 192.168.29.0/24"
-echo "=========================================="
+# format-nmap - A simple, emoji-fied wrapper for nmap discovery
+# Detects network automatically and formats output with emojis
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Detect network
+NETWORK=$(ip route | grep default | awk '{print $3}' | cut -d'.' -f1-3 || echo "192.168.1")
+
+echo -e "${BLUE}==========================================${NC}"
+echo -e "${BLUE}Network Scan Results${NC}"
+echo -e "${BLUE}Network: ${NETWORK}.0/24${NC}"
+echo -e "${BLUE}==========================================${NC}"
 echo ""
 
-sudo nmap -sn 192.168.29.0/24 --dns-servers 192.168.29.43 | \
+sudo nmap -sn "${NETWORK}.0/24" | \
 grep -E "Nmap scan report|Host is up|MAC Address" | \
 sed 's/Nmap scan report for /\n🖥️  HOST: /g' | \
 sed 's/Host is up/   ✓ Status: UP/g' | \
 sed 's/MAC Address:/   🔧 MAC:/g'
 
 echo ""
-echo "=========================================="
-echo "Scan Complete"
-echo "=========================================="
+echo -e "${BLUE}==========================================${NC}"
+echo -e "${BLUE}Scan Complete${NC}"
+echo -e "${BLUE}==========================================${NC}"

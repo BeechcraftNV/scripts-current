@@ -1,218 +1,256 @@
 #!/bin/bash
 
-set -e
+# lan-scanner - Enhanced Network Device Scanner
+# Features: Nmap discovery, ARP cache, mDNS service discovery, Port scanning
 
-# Colors for better readability
+set -euo pipefail
+
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
 GRAY='\033[0;90m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
-# Check if running with sudo, re-exec with sudo if not
+# Check for dependencies
+for cmd in nmap avahi-browse ip column; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo -e "${RED}Error: $cmd is not installed.${NC}" >&2
+        exit 1
+    fi
+done
+
+# Check for sudo
 if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
+# Help
+usage() {
+    echo "Usage: lan-scanner [options]"
+    echo "Options:"
+    echo "  -d, --deep     Perform a deep scan (Top 100 ports + service detection)"
+    echo "  -h, --help     Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  lan-scanner         Quick discovery of devices"
+    echo "  lan-scanner -d      Detailed scan including open ports"
+    exit 0
+}
+
+DEEP_SCAN=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -d|--deep) DEEP_SCAN=true; shift ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $1"; usage ;;
+    esac
+done
+
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}                    LAN Device Scanner                         ${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-echo ""
 
-# Detect network
+# Detect network and local IP
+LOCAL_IP=$(hostname -I | awk '{print $1}')
 NETWORK=$(ip route | grep default | awk '{print $3}' | cut -d'.' -f1-3)
+
 if [ -z "$NETWORK" ]; then
-    echo -e "${YELLOW}Could not detect network. Please enter your network (e.g., 192.168.29):${NC}"
-    read NETWORK
+    # Fallback if no default route (e.g. isolated LAN)
+    NETWORK=$(ip addr | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | head -n 1 | awk '{print $2}' | cut -d'.' -f1-3)
 fi
 
-echo -e "${CYAN}Scanning network: ${NETWORK}.0/24${NC}"
-echo -e "${CYAN}This may take 1-2 minutes...${NC}"
+if [ -z "$NETWORK" ]; then
+    echo -e "${YELLOW}Could not detect network automatically.${NC}"
+    read -p "Enter network prefix (e.g., 192.168.1): " NETWORK
+fi
+
+echo -e "${CYAN}Local IP:        ${MAGENTA}$LOCAL_IP (YOU)${NC}"
+echo -e "${CYAN}Target Network:  ${MAGENTA}${NETWORK}.0/24${NC}"
+if [ "$DEEP_SCAN" = true ]; then
+    echo -e "${YELLOW}Mode:            Deep Scan (Top 100 Ports)${NC}"
+else
+    echo -e "${GREEN}Mode:            Discovery Scan (Ping/ARP)${NC}"
+fi
 echo ""
 
-# Create temp files
+# Temp files
 NMAP_OUTPUT=$(mktemp)
 MDNS_OUTPUT=$(mktemp)
 ARP_OUTPUT=$(mktemp)
-COMBINED_OUTPUT=$(mktemp)
-trap 'rm -f $NMAP_OUTPUT $MDNS_OUTPUT $ARP_OUTPUT $COMBINED_OUTPUT' EXIT
+FINAL_DATA=$(mktemp)
+trap 'rm -f $NMAP_OUTPUT $MDNS_OUTPUT $ARP_OUTPUT $FINAL_DATA' EXIT
 
-# Run ARP cache check first (shows recently seen devices)
-echo -e "${YELLOW}[1/3] Checking ARP cache for known devices...${NC}"
-ip neigh show | grep -v FAILED | awk '{print $1":"$5}' > "$ARP_OUTPUT"
+# 1. ARP Cache
+echo -ne "${YELLOW}[1/3] Reading ARP cache...${NC}\r"
+ip neigh show | grep -v FAILED | awk '{print $1"|"$5}' > "$ARP_OUTPUT"
+echo -e "${GREEN}[1/3] ARP cache read.             ${NC}"
 
-# Run nmap scan with ARP packets (works better for sleeping devices)
-echo -e "${YELLOW}[2/3] Running network scan (ARP + ping)...${NC}"
-# Use aggressive timing (-T4), ARP ping (-PR), and ICMP ping (-PE)
-nmap -sn -T4 -PR -PE --min-rate 1000 $NETWORK.0/24 2>/dev/null > "$NMAP_OUTPUT"
+# 2. mDNS
+echo -ne "${YELLOW}[2/3] Scanning mDNS services...${NC}\r"
+# Get services and hostnames
+timeout 5 avahi-browse -a -t -p -r 2>/dev/null | awk -F';' '
+$1 == "=" && $3 == "IPv4" {
+    ip = $8
+    service = $5
+    # Clean up service name (e.g. _http._tcp -> http)
+    gsub(/^_/, "", service); gsub(/\._tcp$/, "", service); gsub(/\._udp$/, "", service)
+    
+    if (!seen_svc[ip"|"service]++) {
+        services[ip] = (services[ip] == "" ? service : services[ip] "," service)
+    }
+    hostnames[ip] = $7
+}
+END {
+    for (ip in hostnames) print ip "|" hostnames[ip] "|" services[ip]
+}
+' > "$MDNS_OUTPUT"
+echo -e "${GREEN}[2/3] mDNS scan complete.         ${NC}"
 
-# Run mDNS scan and deduplicate
-echo -e "${YELLOW}[3/3] Scanning for mDNS/Bonjour devices...${NC}"
-timeout 8 avahi-browse -a -t -r 2>/dev/null | \
-    grep -E "hostname|address" | \
-    awk '/hostname/{h=$3} /address/ && /IPv4/{ip=$3; if (!seen[h":"ip]++) print h ":" ip}' | \
-    sort -u > "$MDNS_OUTPUT"
-
+# 3. Nmap
+if [ "$DEEP_SCAN" = true ]; then
+    echo -ne "${YELLOW}[3/3] Running Nmap port scan...${NC}\r"
+    # -F for top 100 ports, -T4 for speed
+    nmap -T4 -F --min-rate 1000 "$NETWORK.0/24" 2>/dev/null > "$NMAP_OUTPUT"
+else
+    echo -ne "${YELLOW}[3/3] Running fast discovery scan...${NC}\r"
+    # -sn for ping scan, -PR for ARP ping (best for LAN)
+    nmap -sn -T4 -PR -PE --min-rate 1000 "$NETWORK.0/24" 2>/dev/null > "$NMAP_OUTPUT"
+fi
+echo -e "${GREEN}[3/3] Nmap scan complete.         ${NC}"
 echo ""
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}Devices Found:${NC}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${NC}"
-echo ""
 
-# Build maps
-declare -A mdns_map
-declare -A arp_map
-declare -A all_ips
-
-# Parse mDNS data
-while IFS=: read -r hostname ip; do
-    hostname="${hostname//\[/}"
-    hostname="${hostname//\]/}"
-    mdns_map["$ip"]="$hostname"
-    all_ips["$ip"]=1
-done < "$MDNS_OUTPUT"
-
-# Parse ARP data
-while IFS=: read -r ip mac; do
-    arp_map["$ip"]="$mac"
-    all_ips["$ip"]=1
-done < "$ARP_OUTPUT"
-
-# Parse nmap output and combine with all data
-awk -v network="$NETWORK" '
+# Combined Parsing
+awk -v local_ip="$LOCAL_IP" '
+BEGIN { FS=" "; OFS="|" }
 /Nmap scan report for/ {
-    hostname = ""
-    ip = ""
-
-    # Extract hostname and IP
-    if ($5 != "") {
+    # Extract IP and Hostname
+    if ($NF ~ /^\(/) {
+        ip = $NF; gsub(/[()]/, "", ip)
         hostname = $5
-        gsub(/[()]/, "", hostname)
-        ip = $6
-        gsub(/[()]/, "", ip)
     } else {
-        ip = $5
+        ip = $NF
+        hostname = ""
     }
-
-    # Store for later processing
     ips[ip] = hostname
-    ip_order[++count] = ip
+    status[ip] = "UP"
+    if (!seen[ip]++) ip_list[++count] = ip
 }
+/Host is up/ { status[ip] = "UP" }
 /MAC Address:/ {
-    # Find the most recent IP for this MAC
-    for (i=count; i>=1; i--) {
-        ip = ip_order[i]
-        if (!(ip in mac_map)) {
-            mac = $3
-            vendor = ""
-            for (j=4; j<=NF; j++) {
-                if (vendor == "") vendor = $j
-                else vendor = vendor " " $j
-            }
-            gsub(/[()]/, "", vendor)
-            mac_map[ip] = mac
-            vendor_map[ip] = vendor
-            break
-        }
-    }
+    mac[ip] = $3
+    v = ""
+    for(i=4; i<=NF; i++) v = (v == "" ? $i : v " " $i)
+    gsub(/[()]/, "", v)
+    vendor[ip] = v
 }
-/Host is up/ {
-    # Mark this IP as currently active
-    for (i=count; i>=1; i--) {
-        ip = ip_order[i]
-        if (!(ip in active_map)) {
-            active_map[ip] = 1
-            break
-        }
+/^[0-9]+\/tcp/ {
+    if ($2 == "open") {
+        p = $1 
+        gsub(/\/tcp$/, "", p)
+        ports[ip] = (ports[ip] == "" ? p : ports[ip] "," p)
     }
 }
 END {
-    for (ip in ips) {
-        status = (ip in active_map) ? "UP" : "DOWN"
-        mac = (ip in mac_map) ? mac_map[ip] : ""
-        vendor = (ip in vendor_map) ? vendor_map[ip] : ""
-        hostname = ips[ip]
-        printf "%s|%s|%s|%s|%s\n", ip, hostname, mac, vendor, status
+    for (i=1; i<=count; i++) {
+        addr = ip_list[i]
+        print addr, ips[addr], mac[addr], vendor[addr], status[addr], ports[addr]
     }
 }
-' "$NMAP_OUTPUT" > "$COMBINED_OUTPUT"
+' "$NMAP_OUTPUT" > "$FINAL_DATA"
 
-# Add ARP-only and mDNS-only devices
-for ip in "${!all_ips[@]}"; do
-    if ! grep -q "^$ip|" "$COMBINED_OUTPUT"; then
-        hostname="${mdns_map[$ip]:-}"
-        mac="${arp_map[$ip]:-}"
-        # Try to get vendor from MAC using nmap's database
+# Merge additional data
+declare -A seen_ips
+declare -A mdns_host
+declare -A mdns_svc
+
+while IFS='|' read -r ip hostname mac vendor status ports; do
+    seen_ips["$ip"]=1
+done < "$FINAL_DATA"
+
+while IFS='|' read -r ip host svc; do
+    mdns_host["$ip"]="$host"
+    mdns_svc["$ip"]="$svc"
+    if [ "${seen_ips[$ip]:-0}" -eq 0 ]; then
+        echo "$ip|$host|||CACHED|" >> "$FINAL_DATA"
+        seen_ips["$ip"]=1
+    fi
+done < "$MDNS_OUTPUT"
+
+while IFS='|' read -r ip mac; do
+    if [ "${seen_ips[$ip]:-0}" -eq 0 ]; then
+        # Vendor lookup from MAC OUI
+        oui=$(echo "$mac" | tr -d ':' | cut -c1-6 | tr '[:lower:]' '[:upper:]' || echo "")
         vendor=""
-        if [ -n "$mac" ]; then
-            # Extract OUI (first 3 octets) and format for nmap database lookup
-            # Remove colons and take first 6 hex digits, convert to uppercase
-            oui=$(echo "$mac" | tr -d ':' | cut -c1-6 | tr '[:lower:]' '[:upper:]')
+        if [ -n "$oui" ]; then
             vendor=$(grep "^$oui" /usr/share/nmap/nmap-mac-prefixes 2>/dev/null | cut -f2 || echo "")
         fi
-        echo "$ip|$hostname|$mac|$vendor|CACHED" >> "$COMBINED_OUTPUT"
+        echo "$ip||$mac|$vendor|CACHED|" >> "$FINAL_DATA"
+        seen_ips["$ip"]=1
     fi
-done
+done < "$ARP_OUTPUT"
 
-# Sort and display results
-sort -t. -k1,1n -k2,2n -k3,3n -k4,4n "$COMBINED_OUTPUT" > "$COMBINED_OUTPUT.sorted"
+# Output Header
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+printf "${WHITE}%-18s %-22s %-10s %-18s %s${NC}\n" "IP Address" "Hostname" "Status" "MAC Address" "Vendor / Services"
+echo -e "${BLUE}───────────────────────────────────────────────────────────────${NC}"
 
-ACTIVE_COUNT=0
-CACHED_COUNT=0
-TOTAL_COUNT=0
-
-while IFS='|' read -r ip hostname mac vendor status; do
-    # Skip empty lines
+# Process results and sort
+(
+while IFS='|' read -r ip hostname mac vendor status ports; do
     [ -z "$ip" ] && continue
-
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-
-    # Get mDNS hostname if not already set
-    if [ -z "$hostname" ] || [ "$hostname" = "$ip" ]; then
-        if [ -n "${mdns_map[$ip]+isset}" ]; then
-            hostname="${mdns_map[$ip]}"
-        fi
+    
+    # Identify local machine
+    suffix=""
+    if [ "$ip" = "$LOCAL_IP" ]; then
+        suffix=" (YOU)"
     fi
-
-    # Status indicator
-    if [ "$status" = "UP" ]; then
-        ACTIVE_COUNT=$((ACTIVE_COUNT + 1))
-        status_icon="${GREEN}●${NC}"
-    elif [ "$status" = "CACHED" ]; then
-        CACHED_COUNT=$((CACHED_COUNT + 1))
-        status_icon="${GRAY}○${NC}"
-    else
-        status_icon="${YELLOW}◐${NC}"
+    
+    # Status icon and label
+    case "$status" in
+        UP) s_icon="${GREEN}●${NC} UP" ;;
+        CACHED) s_icon="${GRAY}○${NC} CACHED" ;;
+        *) s_icon="${YELLOW}◐${NC} UNKN" ;;
+    esac
+    
+    # Hostname priority: mDNS > Nmap > None
+    final_host="${mdns_host[$ip]:-$hostname}"
+    [ -z "$final_host" ] && final_host="---"
+    # Truncate hostname if too long
+    if [ ${#final_host} -gt 21 ]; then final_host="${final_host:0:18}..."; fi
+    
+    # Combine Vendor, mDNS services, and Nmap ports
+    info=""
+    [ -n "$vendor" ] && info="$vendor"
+    
+    # Add services (mDNS)
+    svc="${mdns_svc[$ip]:-}"
+    if [ -n "$svc" ]; then
+        if [ -n "$info" ]; then info="$info ($svc)"; else info="($svc)"; fi
     fi
-
-    # Display IP and hostname
-    printf "${CYAN}%-3s${NC} %b ${GREEN}%-15s${NC}" "$TOTAL_COUNT." "$status_icon" "$ip"
-
-    if [ -n "$hostname" ] && [ "$hostname" != "$ip" ]; then
-        printf "│ ${YELLOW}%-30s${NC}" "$hostname"
-    else
-        printf "│ ${GRAY}%-30s${NC}" "(unknown)"
+    
+    # Add ports (Nmap)
+    if [ -n "$ports" ]; then
+        if [ -n "$info" ]; then info="$info [ports:$ports]"; else info="[ports:$ports]"; fi
     fi
+    [ -z "$info" ] && info="---"
+    
+    # Prepare row for sorting
+    # We use a custom format for sorting and then strip it
+    # sortable_ip | colored_row
+    
+    row=$(printf "${CYAN}%-18s${NC} ${YELLOW}%-22s${NC} %b    ${BLUE}%-18s${NC} %s" \
+        "$ip$suffix" "$final_host" "$s_icon" "${mac:- ---}" "$info")
+    
+    echo "$ip|$row"
+done < "$FINAL_DATA"
+) | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | cut -d'|' -f2-
 
-    # Display vendor/device type
-    if [ -n "$vendor" ]; then
-        printf "│ ${BLUE}%s${NC}" "$vendor"
-    fi
-
-    echo ""
-done < "$COMBINED_OUTPUT.sorted"
-
-echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}Scan Complete!${NC}"
-echo -e "${YELLOW}Total devices: $TOTAL_COUNT ${GRAY}(${GREEN}$ACTIVE_COUNT active${GRAY}, ${GRAY}$CACHED_COUNT cached)${NC}"
-echo ""
-echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached (seen recently)${NC}"
-echo ""
-echo -e "${GRAY}Note: This scan shows devices that respond to network probes or are in${NC}"
-echo -e "${GRAY}      ARP cache. Some devices (sleeping phones, privacy-enabled devices)${NC}"
-echo -e "${GRAY}      may not appear. Check your router admin page for complete list.${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${GRAY}Total: $(wc -l < "$FINAL_DATA") devices found.${NC}"
+echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached  (Use -d for port scan)${NC}"
 echo ""

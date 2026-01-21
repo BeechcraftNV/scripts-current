@@ -95,49 +95,36 @@ sync-scripts
 
 ### lan-scanner
 
-Comprehensive LAN device scanner that discovers both active and sleeping devices on your network.
+Comprehensive LAN device scanner that discovers both active and sleeping devices on your network with deep-scan capabilities.
 
 **Usage:**
 ```bash
-lan-scanner
+lan-scanner [options]
 ```
 
+**Options:**
+- `-d, --deep`: Perform a deep scan (Top 100 ports + service detection)
+- `-h, --help`: Show help message
+
 **Features:**
-- Combines nmap, mDNS/Bonjour, and ARP cache for complete device discovery
-- Finds sleeping/idle devices (phones, tablets, printers)
-- Shows IP address, hostname, and device manufacturer
-- Color-coded status indicators (active vs. cached)
-- Auto-detects network range
-- Auto-elevates to sudo when needed
-
-**What it scans:**
-- **nmap with ARP:** Active devices responding to network requests
-- **mDNS/Bonjour:** Apple devices, printers, smart home devices
-- **ARP cache:** Recently seen devices (even if currently sleeping)
-
-**Output includes:**
-- IP address (sorted numerically)
-- Hostname (from DNS, mDNS, or reverse lookup)
-- Device manufacturer (from MAC address vendor database)
-- Status: Active (●) or Cached/Recently Seen (○)
+- **Local IP Identification**: Labels your current machine as `(YOU)`.
+- **Deep Scan Mode**: Identifies open ports and services (like HTTP, SSH, AirPlay).
+- **Multi-Source Discovery**: Combines `nmap`, `avahi-browse` (mDNS), and ARP cache.
+- **Service Integration**: Displays mDNS service names (e.g., `_googlecast`, `_ipp`) directly in the info column.
+- **Enhanced Table Layout**: A clean, aligned table with prioritized hostnames and status indicators.
+- **Auto-detects Network**: Finds your local subnet automatically.
 
 **Requirements:**
 - `nmap` - Network scanning tool
-- `avahi-browse` - mDNS/Bonjour discovery (usually pre-installed on Linux)
+- `avahi-browse` - mDNS/Bonjour discovery
+- `ip`, `column`, `bash`
 - sudo access (script will auto-request)
-
-**Example output:**
-```
-1.  ● 192.168.29.1    │ router.local                  │ ASUSTek Computer
-2.  ● 192.168.29.43   │ server.local                  │ Shenzhen Madigi
-3.  ○ 192.168.29.171  │ HP846993CE62EB.local          │ HP Inc.
-```
 
 ---
 
 ### format-nmap
 
-Helper script to format nmap output in a more readable form.
+Helper script to format nmap output in a more readable, emoji-fied form.
 
 **Usage:**
 ```bash
@@ -145,12 +132,12 @@ format-nmap
 ```
 
 **What it does:**
-- Runs `nmap -sn` scan on detected network
-- Formats output with clear section headers
-- Shows host status with visual indicators
-- Displays MAC addresses and vendor info separately
+- Automatically detects your current network range.
+- Runs a fast ping scan.
+- Formats output with 🖥️ (Host), ✓ (Status), and 🔧 (MAC).
+- Uses color-coded section headers.
 
-**Note:** This is a simpler alternative to `lan-scanner`. For comprehensive device discovery, use `lan-scanner` instead.
+**Note:** This is a stylistic alternative to `lan-scanner`. For comprehensive device and service discovery, use `lan-scanner` instead.
 
 **Requirements:**
 - `nmap` - Network scanning tool
