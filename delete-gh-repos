@@ -1,0 +1,300 @@
+#!/bin/bash
+
+###################################################################################
+# delete-gh-repos - Bulk delete GitHub repositories from a file
+###################################################################################
+#
+# USAGE:
+#   delete-gh-repos [OPTIONS] <repos-file>
+#
+# DESCRIPTION:
+#   Safely delete multiple GitHub repositories listed in a file. The script
+#   checks that each repo exists before attempting deletion and provides
+#   detailed feedback throughout the process.
+#
+# OPTIONS:
+#   -n, --dry-run       Show what would be deleted without actually deleting
+#   -u, --user USER     GitHub username (required if repos-file contains only repo names)
+#   -h, --help          Show this help message
+#
+# FILE FORMAT:
+#   The repos file should contain one repository per line. Two formats supported:
+#
+#   Format 1 - Repository names only (requires -u/--user option):
+#     my-repo
+#     another-repo
+#     old-project
+#
+#   Format 2 - Full repository paths (username auto-detected):
+#     username/my-repo
+#     username/another-repo
+#     username/old-project
+#
+#   Lines starting with # are treated as comments and ignored.
+#   Blank lines are ignored.
+#
+# EXAMPLES:
+#   # Dry run to preview what would be deleted
+#   delete-gh-repos --dry-run repos-to-delete.txt
+#
+#   # Delete repos from file (file contains "username/repo" format)
+#   delete-gh-repos repos-to-delete.txt
+#
+#   # Delete repos by name with explicit username
+#   delete-gh-repos --user BeechcraftNV repos-to-delete.txt
+#
+# REQUIREMENTS:
+#   - GitHub CLI (gh) must be installed
+#   - Must be authenticated: gh auth login
+#   - Must have delete_repo scope: gh auth refresh -h github.com -s delete_repo
+#
+# SAFETY FEATURES:
+#   - Checks if each repo exists before attempting deletion
+#   - Requires typing 'DELETE' to confirm (bypassed in automated scripts)
+#   - Dry-run mode for safe testing
+#   - Detailed error reporting
+#   - Rate limiting (1 second delay between deletions)
+#
+###################################################################################
+
+set -euo pipefail
+
+# Default values
+DRY_RUN=false
+USERNAME=""
+REPOS_FILE=""
+
+# Show help
+show_help() {
+  cat << 'EOF'
+Usage: delete-gh-repos [OPTIONS] <repos-file>
+
+Bulk delete GitHub repositories listed in a file.
+
+OPTIONS:
+  -n, --dry-run       Show what would be deleted without actually deleting
+  -u, --user USER     GitHub username (required if file contains only repo names)
+  -h, --help          Show this help message
+
+FILE FORMAT:
+  One repository per line. Two formats supported:
+
+  Format 1 - Repository names only (requires -u/--user):
+    my-repo
+    another-repo
+
+  Format 2 - Full paths (username auto-detected):
+    username/my-repo
+    username/another-repo
+
+  Lines starting with # are comments. Blank lines are ignored.
+
+EXAMPLES:
+  # Preview what would be deleted
+  delete-gh-repos --dry-run repos.txt
+
+  # Delete repos (file has "user/repo" format)
+  delete-gh-repos repos.txt
+
+  # Delete repos with explicit username
+  delete-gh-repos --user myusername repos.txt
+
+REQUIREMENTS:
+  GitHub CLI must be installed and authenticated with delete_repo scope:
+    gh auth login
+    gh auth refresh -h github.com -s delete_repo
+
+EOF
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -n|--dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -u|--user)
+      USERNAME="$2"
+      shift 2
+      ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+    *)
+      REPOS_FILE="$1"
+      shift
+      ;;
+  esac
+done
+
+# Validate repos file provided
+if [ -z "$REPOS_FILE" ]; then
+  echo "ERROR: No repos file specified"
+  echo ""
+  show_help
+  exit 1
+fi
+
+# Check if repos file exists
+if [ ! -f "$REPOS_FILE" ]; then
+  echo "ERROR: File not found: $REPOS_FILE"
+  exit 1
+fi
+
+# Check if gh CLI is installed
+if ! command -v gh &> /dev/null; then
+  echo "ERROR: GitHub CLI (gh) not found. Install with: sudo apt install gh"
+  exit 1
+fi
+
+# Check if authenticated
+if ! gh auth status &> /dev/null; then
+  echo "ERROR: Not authenticated. Run: gh auth login"
+  exit 1
+fi
+
+# Read repos from file
+echo "Reading repositories from: $REPOS_FILE"
+echo ""
+
+REPOS=()
+declare -A REPO_USERS
+
+while IFS= read -r line || [ -n "$line" ]; do
+  # Skip comments and blank lines
+  line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [[ -z "$line" || "$line" =~ ^# ]] && continue
+
+  # Check if line contains username/repo format
+  if [[ "$line" =~ ^([^/]+)/(.+)$ ]]; then
+    user="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+    REPOS+=("$repo")
+    REPO_USERS["$repo"]="$user"
+  else
+    # Just repo name, need username from argument
+    REPOS+=("$line")
+    if [ -n "$USERNAME" ]; then
+      REPO_USERS["$line"]="$USERNAME"
+    fi
+  fi
+done < "$REPOS_FILE"
+
+# Validate we have repos to process
+if [ ${#REPOS[@]} -eq 0 ]; then
+  echo "ERROR: No repositories found in file"
+  exit 1
+fi
+
+# Validate we have usernames for all repos
+missing_user=false
+for repo in "${REPOS[@]}"; do
+  if [ -z "${REPO_USERS[$repo]:-}" ]; then
+    echo "ERROR: No username specified for repo: $repo"
+    missing_user=true
+  fi
+done
+
+if [ "$missing_user" = true ]; then
+  echo ""
+  echo "Use -u/--user option or specify repos as 'username/repo' in the file"
+  exit 1
+fi
+
+# Show mode
+if [ "$DRY_RUN" = true ]; then
+  echo "=== DRY RUN MODE ==="
+  echo "No repos will be deleted. Checking which repos exist..."
+  echo ""
+fi
+
+echo "Checking ${#REPOS[@]} repositories..."
+echo ""
+
+# Arrays to track results
+existing_repos=()
+missing_repos=()
+failed_repos=()
+
+# Check which repos exist
+for repo in "${REPOS[@]}"; do
+  user="${REPO_USERS[$repo]}"
+  full_name="$user/$repo"
+
+  if gh repo view "$full_name" &> /dev/null; then
+    existing_repos+=("$full_name")
+    echo "  ✓ $full_name (exists)"
+  else
+    missing_repos+=("$full_name")
+    echo "  ✗ $full_name (not found)"
+  fi
+done
+
+echo ""
+echo "Summary:"
+echo "  - ${#existing_repos[@]} repos found"
+echo "  - ${#missing_repos[@]} repos not found"
+echo ""
+
+# Exit if nothing to delete
+if [ ${#existing_repos[@]} -eq 0 ]; then
+  echo "No repos to delete."
+  exit 0
+fi
+
+if [ "$DRY_RUN" = true ]; then
+  echo "Would delete these ${#existing_repos[@]} repos:"
+  for repo in "${existing_repos[@]}"; do
+    echo "  - $repo"
+  done
+  echo ""
+  echo "Run without --dry-run to actually delete them."
+  exit 0
+fi
+
+# Confirm deletion
+echo "This will PERMANENTLY DELETE ${#existing_repos[@]} repos:"
+for repo in "${existing_repos[@]}"; do
+  echo "  - $repo"
+done
+echo ""
+read -p "Type 'DELETE' to confirm: " confirm
+
+if [ "$confirm" != "DELETE" ]; then
+  echo "Aborted."
+  exit 1
+fi
+
+# Delete repos
+echo ""
+echo "Deleting repos..."
+for repo in "${existing_repos[@]}"; do
+  echo -n "Deleting $repo... "
+  if gh repo delete "$repo" --yes 2>&1; then
+    echo "✓ deleted"
+  else
+    echo "✗ failed"
+    failed_repos+=("$repo")
+  fi
+  sleep 1  # Be nice to GitHub API
+done
+
+# Final summary
+echo ""
+echo "=== Summary ==="
+echo "Successfully deleted: $((${#existing_repos[@]} - ${#failed_repos[@]})) repos"
+if [ ${#failed_repos[@]} -gt 0 ]; then
+  echo "Failed to delete: ${#failed_repos[@]} repos"
+  for repo in "${failed_repos[@]}"; do
+    echo "  - $repo"
+  done
+  exit 1
+fi
+echo "All done!"
