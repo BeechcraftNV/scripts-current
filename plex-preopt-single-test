@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# plex-preopt-single-test — Test encoding on ONE file before batch processing
+# Run this first to verify quality/settings before processing entire library
+
+set -euo pipefail
+
+# -------- Config --------
+# Test file: pass as argument or edit default below
+DEFAULT_TEST_FILE="/mnt/pool/movies/Top Gun (1986)/Top.Gun.1986.Blu-ray.1080p.REMUX.AVC.TrueHD.5.1-HDH.mkv"
+TEST_FILE="${1:-$DEFAULT_TEST_FILE}"
+
+OUT_DIR="/mnt/pool/optimized-test"  # Separate test location
+LOG_FILE="/tmp/plex-preopt-test.log"
+
+# Video settings
+V_CODEC="h264_vaapi"
+V_QP="23"              # Quality: 20=high, 23=balanced, 26=lower (adjust if needed)
+V_BITRATE="6M"         # Fallback bitrate
+V_MAX_BITRATE="8M"
+V_BUFSIZE="12M"
+
+# Audio settings
+A_CODEC="aac"
+A_BR="192k"
+A_CHANNELS="2"
+
+# Max resolution
+MAX_WIDTH=1920
+MAX_HEIGHT=1080
+
+# -------- Script --------
+echo "=========================================="
+echo "Plex Pre-Optimization Test Script"
+echo "=========================================="
+echo ""
+
+# Validation
+if [[ ! -f "$TEST_FILE" ]]; then
+  echo "ERROR: Test file not found: $TEST_FILE"
+  echo ""
+  echo "Usage: plex-preopt-single-test [path/to/file.mkv]"
+  echo ""
+  echo "Pass a file path as argument, or edit DEFAULT_TEST_FILE in the script."
+  echo "Recommended: Pick your largest REMUX file (e.g., Lord of the Rings)"
+  exit 1
+fi
+
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "ERROR: ffmpeg not found. Install it first:"
+  echo "  sudo apt install ffmpeg intel-media-va-driver"
+  exit 1
+fi
+
+if ! command -v ffprobe >/dev/null 2>&1; then
+  echo "ERROR: ffprobe not found (should come with ffmpeg)"
+  exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+rm -f "$LOG_FILE"
+
+# Get input file info
+echo "Input File:"
+echo "  Path: $TEST_FILE"
+IN_SIZE=$(stat -c%s "$TEST_FILE")
+IN_SIZE_GB=$(awk "BEGIN {printf \"%.2f\", $IN_SIZE/1024/1024/1024}")
+echo "  Size: ${IN_SIZE_GB} GB"
+
+# Probe video/audio details
+V_CODEC_IN=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$TEST_FILE" 2>/dev/null)
+A_CODEC_IN=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$TEST_FILE" 2>/dev/null)
+WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of default=nw=1:nk=1 "$TEST_FILE" 2>/dev/null)
+HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "$TEST_FILE" 2>/dev/null)
+DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$TEST_FILE" 2>/dev/null)
+DURATION_MIN=$(awk "BEGIN {printf \"%.0f\", $DURATION/60}")
+
+echo "  Video: $V_CODEC_IN ${WIDTH}x${HEIGHT}"
+echo "  Audio: $A_CODEC_IN"
+echo "  Duration: ${DURATION_MIN} minutes"
+echo ""
+
+# Determine output path and settings
+BASENAME=$(basename "$TEST_FILE")
+OUT_FILE="$OUT_DIR/${BASENAME%.*}.mp4"
+TMP_FILE="${OUT_FILE}.tmp.mp4"
+
+echo "Output File:"
+echo "  Path: $OUT_FILE"
+echo ""
+
+echo "Encoding Settings:"
+echo "  Video Codec: $V_CODEC (quality: $V_QP)"
+echo "  Audio Codec: $A_CODEC ($A_BR, stereo)"
+echo "  Max Resolution: ${MAX_WIDTH}x${MAX_HEIGHT}"
+
+# Build video filter chain
+VF_CHAIN="format=nv12,hwupload"
+if (( WIDTH > MAX_WIDTH || HEIGHT > MAX_HEIGHT )); then
+  VF_CHAIN="$VF_CHAIN,scale_vaapi=w=${MAX_WIDTH}:h=${MAX_HEIGHT}:force_original_aspect_ratio=decrease"
+  echo "  Downscaling: YES (${WIDTH}x${HEIGHT} → ${MAX_WIDTH}x${MAX_HEIGHT})"
+else
+  echo "  Downscaling: NO (already ≤1080p)"
+fi
+
+if [[ "$A_CODEC_IN" =~ ^(truehd|dts|eac3|flac)$ ]]; then
+  echo "  Audio Conversion: YES (${A_CODEC_IN} → ${A_CODEC})"
+else
+  echo "  Audio Conversion: ${A_CODEC_IN} → ${A_CODEC}"
+fi
+echo ""
+
+# Estimate encoding time (rough: 1-2x realtime for VAAPI)
+EST_MIN=$(awk "BEGIN {printf \"%.0f\", $DURATION_MIN * 1.5}")
+echo "Estimated encoding time: ~${EST_MIN} minutes"
+echo "(VAAPI hardware encoding, times vary by CPU/GPU)"
+echo ""
+
+read -p "Press Enter to start encoding, or Ctrl+C to abort..."
+echo ""
+
+# Start encoding
+echo "=========================================="
+echo "Starting encode at $(date +'%F %T')"
+echo "=========================================="
+START_TIME=$(date +%s)
+
+# Try QP-based encoding first
+echo "Attempting quality-based encoding (QP mode)..."
+if nice -n 15 ionice -c3 ffmpeg -hide_banner -y -nostdin \
+  -hwaccel vaapi -hwaccel_output_format vaapi \
+  -hwaccel_device /dev/dri/renderD128 \
+  -i "$TEST_FILE" \
+  -map 0:v:0 -map 0:a:0 -map 0:s? \
+  -vf "$VF_CHAIN" \
+  -c:v $V_CODEC \
+  -qp $V_QP \
+  -c:a $A_CODEC -b:a $A_BR -ac $A_CHANNELS \
+  -c:s mov_text \
+  -movflags +faststart \
+  "$TMP_FILE" 2>&1 | tee "$LOG_FILE"; then
+  echo "✓ QP mode succeeded"
+else
+  echo "⚠ QP mode failed, retrying with bitrate mode..."
+  rm -f "$TMP_FILE"
+  
+  nice -n 15 ionice -c3 ffmpeg -hide_banner -y -nostdin \
+    -hwaccel vaapi -hwaccel_output_format vaapi \
+    -hwaccel_device /dev/dri/renderD128 \
+    -i "$TEST_FILE" \
+    -map 0:v:0 -map 0:a:0 -map 0:s? \
+    -vf "$VF_CHAIN" \
+    -c:v $V_CODEC \
+    -b:v $V_BITRATE -maxrate $V_MAX_BITRATE -bufsize $V_BUFSIZE \
+    -c:a $A_CODEC -b:a $A_BR -ac $A_CHANNELS \
+    -c:s mov_text \
+    -movflags +faststart \
+    "$TMP_FILE" 2>&1 | tee -a "$LOG_FILE"
+  
+  echo "✓ Bitrate mode succeeded"
+fi
+
+# Finalize
+mv -f "$TMP_FILE" "$OUT_FILE"
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+ELAPSED_MIN=$((ELAPSED / 60))
+
+echo ""
+echo "=========================================="
+echo "Encoding Complete!"
+echo "=========================================="
+echo "Time elapsed: ${ELAPSED_MIN} minutes"
+
+# Calculate output size and compression
+OUT_SIZE=$(stat -c%s "$OUT_FILE")
+OUT_SIZE_GB=$(awk "BEGIN {printf \"%.2f\", $OUT_SIZE/1024/1024/1024}")
+REDUCTION=$(awk "BEGIN {printf \"%.1f\", (1 - $OUT_SIZE/$IN_SIZE)*100}")
+
+echo ""
+echo "Results:"
+echo "  Input:  ${IN_SIZE_GB} GB"
+echo "  Output: ${OUT_SIZE_GB} GB"
+echo "  Reduction: ${REDUCTION}%"
+echo "  Space saved: $(awk "BEGIN {printf \"%.2f\", ($IN_SIZE-$OUT_SIZE)/1024/1024/1024}") GB"
+echo ""
+
+# Verify output
+echo "Verifying output file..."
+if ffprobe -v error "$OUT_FILE" >/dev/null 2>&1; then
+  echo "✓ Output file is valid"
+  
+  # Show output codec info
+  OUT_V_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$OUT_FILE" 2>/dev/null)
+  OUT_A_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$OUT_FILE" 2>/dev/null)
+  OUT_WIDTH=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of default=nw=1:nk=1 "$OUT_FILE" 2>/dev/null)
+  OUT_HEIGHT=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "$OUT_FILE" 2>/dev/null)
+  
+  echo "  Video: $OUT_V_CODEC ${OUT_WIDTH}x${OUT_HEIGHT}"
+  echo "  Audio: $OUT_A_CODEC"
+else
+  echo "✗ ERROR: Output file appears corrupted!"
+  exit 1
+fi
+
+echo ""
+echo "=========================================="
+echo "Next Steps:"
+echo "=========================================="
+echo ""
+echo "1. TEST PLAYBACK:"
+echo "   Watch the encoded file on your 1080p monitor"
+echo "   File: $OUT_FILE"
+echo ""
+echo "2. CHECK QUALITY:"
+echo "   - Does it look good on your screen?"
+echo "   - Any noticeable compression artifacts?"
+echo "   - Audio sounds clean?"
+echo ""
+echo "3. VERIFY PLEX DIRECT PLAY:"
+echo "   - Add $OUT_DIR to Plex temporarily"
+echo "   - Play the file and check Plex dashboard"
+echo "   - Should show 'Direct Play' (not 'Transcode')"
+echo ""
+echo "4. IF QUALITY IS GOOD:"
+echo "   a. Run full batch script: plex-preopt"
+echo "   b. After batch completes, verify a few files"
+echo "   c. Delete originals to reclaim space"
+echo ""
+echo "5. IF QUALITY IS BAD:"
+echo "   Adjust settings in this script:"
+echo "   - Lower V_QP (20=higher quality, bigger files)"
+echo "   - Or switch to software encoding (libx264)"
+echo "   Then re-run this test"
+echo ""
+echo "FFmpeg log saved to: $LOG_FILE"
+echo "=========================================="

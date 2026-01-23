@@ -1,0 +1,71 @@
+#!/bin/bash
+# Disable Sleep for Plex Server
+# Works on any DE (Cosmic, GNOME, KDE, etc.)
+
+set -euo pipefail
+
+echo "=========================================="
+echo "Disable Sleep on Plex Server"
+echo "=========================================="
+echo ""
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "This script needs sudo privileges."
+    echo "Re-running with sudo..."
+    exec sudo "$0" "$@"
+fi
+
+echo "[1/4] Disabling systemd sleep targets..."
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+echo "  ✓ Sleep targets disabled"
+
+echo ""
+echo "[2/4] Configuring systemd-logind..."
+
+# Backup original config
+if [ ! -f /etc/systemd/logind.conf.backup ]; then
+    cp /etc/systemd/logind.conf /etc/systemd/logind.conf.backup
+    echo "  ✓ Backed up original config to /etc/systemd/logind.conf.backup"
+fi
+
+# Configure logind to ignore power events
+cat > /etc/systemd/logind.conf.d/disable-sleep.conf << 'EOF'
+[Login]
+# Disable all sleep/suspend behavior
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+IdleAction=ignore
+EOF
+
+echo "  ✓ Created /etc/systemd/logind.conf.d/disable-sleep.conf"
+
+echo ""
+echo "[3/4] Restarting systemd-logind..."
+systemctl restart systemd-logind
+echo "  ✓ Logind restarted"
+
+echo ""
+echo "[4/4] Verifying configuration..."
+echo ""
+echo "Sleep targets status:"
+systemctl status sleep.target suspend.target hibernate.target 2>&1 | grep -E "Loaded|Active" || true
+
+echo ""
+echo "=========================================="
+echo "✓ Sleep Disabled Successfully!"
+echo "=========================================="
+echo ""
+echo "Your server will now stay awake 24/7."
+echo ""
+echo "Power consumption:"
+echo "  • Idle: ~6-10W (very low!)"
+echo "  • Under load: ~20-35W"
+echo ""
+echo "To re-enable sleep later (if needed):"
+echo "  sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target"
+echo "  sudo rm /etc/systemd/logind.conf.d/disable-sleep.conf"
+echo "  sudo systemctl restart systemd-logind"
+echo ""

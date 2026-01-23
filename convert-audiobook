@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# convert-audiobook - Convert directory of MP3s to M4B audiobook
+# Usage: ./convert-audiobook <input_directory> [output_file]
+
+set -e  # Exit on error
+
+# Check arguments
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <input_directory> [output_file]"
+    echo "Example: $0 /path/to/audiobook/folder"
+    echo "Example: $0 /path/to/audiobook/folder /output/path/book.m4b"
+    exit 1
+fi
+
+INPUT_DIR="$1"
+OUTPUT_FILE="${2:-}"
+
+# Validate input directory
+if [ ! -d "$INPUT_DIR" ]; then
+    echo "Error: Input directory does not exist: $INPUT_DIR"
+    exit 1
+fi
+
+# Check if directory contains MP3 files
+MP3_COUNT=$(find "$INPUT_DIR" -maxdepth 1 -type f -iname "*.mp3" | wc -l)
+if [ "$MP3_COUNT" -eq 0 ]; then
+    echo "Error: No MP3 files found in $INPUT_DIR"
+    exit 1
+fi
+
+echo "Found $MP3_COUNT MP3 files in $INPUT_DIR"
+
+# Get absolute path of input directory
+INPUT_DIR=$(realpath "$INPUT_DIR")
+
+# Extract folder name for default output
+FOLDER_NAME=$(basename "$INPUT_DIR")
+
+# If output file not specified, create it in the input directory
+if [ -z "$OUTPUT_FILE" ]; then
+    OUTPUT_FILE="$INPUT_DIR/${FOLDER_NAME}.m4b"
+else
+    # Get absolute path for output file
+    OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
+    OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
+    OUTPUT_FILENAME=$(basename "$OUTPUT_FILE")
+    OUTPUT_FILE="$OUTPUT_DIR/$OUTPUT_FILENAME"
+fi
+
+echo "Output file will be: $OUTPUT_FILE"
+
+# Try to extract metadata from folder name
+# Expected formats: "Author - Title" or just "Title"
+AUTHOR=""
+TITLE="$FOLDER_NAME"
+
+if [[ "$FOLDER_NAME" =~ ^(.+)\ -\ (.+)$ ]]; then
+    AUTHOR="${BASH_REMATCH[1]}"
+    TITLE="${BASH_REMATCH[2]}"
+    echo "Detected: Author='$AUTHOR', Title='$TITLE'"
+else
+    echo "Using folder name as title: '$TITLE'"
+fi
+
+echo ""
+echo "Starting conversion..."
+echo "This may take a while depending on the size of the audiobook."
+echo ""
+
+# Run m4b-tool via Docker
+if [ -n "$AUTHOR" ]; then
+    docker run --rm \
+        -v "$INPUT_DIR:/mnt" \
+        -v "$(dirname "$OUTPUT_FILE"):/output" \
+        sandreas/m4b-tool:latest \
+        merge /mnt \
+        --output-file="/output/$(basename "$OUTPUT_FILE")" \
+        --name="$TITLE" \
+        --albumartist="$AUTHOR"\
+        --jobs=4
+else
+    docker run --rm \
+        -v "$INPUT_DIR:/mnt" \
+        -v "$(dirname "$OUTPUT_FILE"):/output" \
+        sandreas/m4b-tool:latest \
+        merge /mnt \
+        --output-file="/output/$(basename "$OUTPUT_FILE")" \
+        --name="$TITLE"\
+        --jobs=4
+
+fi
+
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✓ Conversion complete!"
+    echo "Output: $OUTPUT_FILE"
+    
+    # Show file size
+    SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
+    echo "Size: $SIZE"
+else
+    echo ""
+    echo "✗ Conversion failed!"
+    exit 1
+fi

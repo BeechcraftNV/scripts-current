@@ -1,0 +1,26 @@
+#!/bin/bash
+# Fix VAAPI access by adding user to render group
+
+set -euo pipefail
+
+echo "=== VAAPI Hardware Acceleration Fix ==="
+echo ""
+
+# Add user to render group
+echo "→ Adding user 'steven' to 'render' group..."
+usermod -a -G render steven
+echo "  ✓ User added to render group"
+echo ""
+
+# Verify group membership
+echo "→ Verifying group membership..."
+getent group render
+echo ""
+
+echo "✅ Fix applied successfully!"
+echo ""
+echo "IMPORTANT: You must log out and log back in for this to take effect."
+echo "Or run: newgrp render"
+echo ""
+echo "After re-login, run this to test VAAPI:"
+echo "  ffmpeg -hide_banner -init_hw_device vaapi=va -hwaccel vaapi -f lavfi -i testsrc=duration=1:size=16x16:rate=1 -c:v h264_vaapi -frames:v 1 -f null -"

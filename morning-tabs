@@ -1,14 +1,24 @@
 #!/bin/bash
-set -eu
+# morning-tabs - Open morning routine URLs in Brave browser
+# Reads URLs from ~/morning-urls.txt (one URL per line, # for comments)
 
-# Open morning routine URLs in Brave browser
-# URLs are read from ~/morning-urls.txt
+set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$0")"
 URL_FILE="$SCRIPT_DIR/morning-urls.txt"
 
 if [[ ! -f "$URL_FILE" ]]; then
-    echo "Error: $URL_FILE not found"
+    # Fallback to home directory
+    URL_FILE="$HOME/morning-urls.txt"
+fi
+
+if [[ ! -f "$URL_FILE" ]]; then
+    echo "Error: morning-urls.txt not found in $SCRIPT_DIR or $HOME"
+    exit 1
+fi
+
+if ! command -v brave-browser &>/dev/null; then
+    echo "Error: brave-browser not found in PATH"
     exit 1
 fi
 

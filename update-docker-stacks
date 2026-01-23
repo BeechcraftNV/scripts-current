@@ -1,0 +1,329 @@
+#!/bin/bash
+# Docker Stack Update Script for lmdeserver
+# Updates all compose stacks in /opt/docker/compose/
+# Each stack has its own <name>.yml file
+#
+# Usage: update-docker-stacks [--dry-run] [stack1] [stack2] ...
+#   --dry-run       : Show what would be done without making changes
+#   stack1 stack2   : Only update specified stacks (without .yml extension)
+#   (no arguments)  : Update all stacks in /opt/docker/compose/
+
+set -euo pipefail
+
+# Parse command line arguments
+DRY_RUN=false
+SELECTED_STACKS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: update-docker-stacks [--dry-run] [stack1] [stack2] ..."
+            echo ""
+            echo "Options:"
+            echo "  --dry-run       Show what would be done without making changes"
+            echo "  --help, -h      Show this help message"
+            echo ""
+            echo "Arguments:"
+            echo "  stack1 stack2   Only update specified stacks (without .yml extension)"
+            echo "  (no arguments)  Update all stacks in /opt/docker/compose/"
+            echo ""
+            echo "Examples:"
+            echo "  update-docker-stacks                    # Update all stacks"
+            echo "  update-docker-stacks --dry-run          # Dry-run all stacks"
+            echo "  update-docker-stacks plex pihole        # Update only plex and pihole"
+            echo "  update-docker-stacks --dry-run plex     # Dry-run for plex only"
+            exit 0
+            ;;
+        *)
+            SELECTED_STACKS+=("$1.yml")
+            shift
+            ;;
+    esac
+done
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+COMPOSE_DIR="/opt/docker/compose"
+LOG_FILE="/tmp/docker-update-$(date +%Y%m%d-%H%M%S).log"
+
+# Check dependencies
+if ! command -v docker &> /dev/null; then
+    echo -e "${RED}Error: docker is required but not installed${NC}"
+    exit 1
+fi
+
+if ! docker info &> /dev/null; then
+    echo -e "${RED}Error: Docker is not running${NC}"
+    exit 1
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo -e "${RED}Error: jq is required but not installed${NC}"
+    echo "Install with: sudo apt install jq"
+    exit 1
+fi
+
+# Arrays for tracking
+declare -a UPDATED_STACKS=()
+declare -a FAILED_STACKS=()
+declare -a NO_UPDATES=()
+declare -a WARNINGS=()
+
+echo "=== Docker Stack Update for lmdeserver ===" | tee "$LOG_FILE"
+echo "Started: $(date)" | tee -a "$LOG_FILE"
+if [ "$DRY_RUN" = true ]; then
+    echo -e "${YELLOW}*** DRY-RUN MODE - No changes will be made ***${NC}" | tee -a "$LOG_FILE"
+fi
+echo "" | tee -a "$LOG_FILE"
+
+# Check if compose directory exists
+if [ ! -d "$COMPOSE_DIR" ]; then
+    echo -e "${RED}Error: $COMPOSE_DIR not found${NC}" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# Find all .yml files in the compose directory
+cd "$COMPOSE_DIR" || exit 1
+
+if [ ${#SELECTED_STACKS[@]} -gt 0 ]; then
+    COMPOSE_FILES=("${SELECTED_STACKS[@]}")
+    echo -e "${YELLOW}Processing selected stacks only${NC}" | tee -a "$LOG_FILE"
+else
+    COMPOSE_FILES=(*.yml)
+fi
+
+if [ ${#COMPOSE_FILES[@]} -eq 0 ] || [ ! -f "${COMPOSE_FILES[0]}" ]; then
+    echo -e "${RED}Error: No .yml files found in $COMPOSE_DIR${NC}" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+echo -e "${BLUE}Found ${#COMPOSE_FILES[@]} compose files${NC}" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+# Function to get actual image digests from registry (RepoDigests)
+get_image_digests() {
+    local compose_file=$1
+    local digests=""
+    
+    # Extract all unique image references from the compose file
+    local images=$(docker compose -f "$compose_file" config --format json 2>/dev/null | \
+                   jq -r '.services[].image' 2>/dev/null | \
+                   sort -u)
+    
+    if [ -z "$images" ]; then
+        echo "ERROR"
+        return
+    fi
+    
+    # For each image, get its RepoDigest (the sha256 from registry)
+    while IFS= read -r image; do
+        if [ -n "$image" ]; then
+            # Try to get the first RepoDigest; if image doesn't exist locally yet, mark as "new"
+            local digest=$(docker inspect "$image" --format '{{index .RepoDigests 0}}' 2>/dev/null)
+            if [ -z "$digest" ]; then
+                # Image not found locally - will be pulled
+                digest="NEW:$image"
+            fi
+            digests="${digests}${image}=${digest}"$'\n'
+        fi
+    done <<< "$images"
+    
+    echo "$digests"
+}
+
+# Function to check service health
+check_service_health() {
+    local service=$1
+    local display_name=${2:-$(echo "$service" | sed 's/\b\(.\)/\u\1/')}
+
+    if docker ps --format "{{.Names}}" | grep -qi "$service"; then
+        if docker ps --filter "name=$service" --filter "status=running" | grep -qi "$service"; then
+            echo "  ✓ $display_name: Running" | tee -a "$LOG_FILE"
+        else
+            echo -e "  ${RED}✗ $display_name: Not running${NC}" | tee -a "$LOG_FILE"
+        fi
+    fi
+}
+
+# Process each compose file
+for compose_file in "${COMPOSE_FILES[@]}"; do
+    stack_name="${compose_file%.yml}"
+
+    echo -e "${BLUE}═══ Processing: $stack_name ═══${NC}" | tee -a "$LOG_FILE"
+
+    # Verify file is valid
+    if ! docker compose -f "$compose_file" config >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Invalid compose file, skipping${NC}" | tee -a "$LOG_FILE"
+        FAILED_STACKS+=("$stack_name (invalid compose file)")
+        echo "" | tee -a "$LOG_FILE"
+        continue
+    fi
+
+    # Get current image digests
+    BEFORE_DIGESTS=$(get_image_digests "$compose_file")
+
+    if [ "$BEFORE_DIGESTS" = "ERROR" ]; then
+        echo -e "${YELLOW}  ⚠ Could not get current image digests${NC}" | tee -a "$LOG_FILE"
+    fi
+
+    # Pull new images
+    echo "  → Pulling images..." | tee -a "$LOG_FILE"
+
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}  [DRY-RUN] Would pull images${NC}" | tee -a "$LOG_FILE"
+    else
+        if ! timeout 300 docker compose -f "$compose_file" pull 2>&1 | tee -a "$LOG_FILE"; then
+            echo -e "${RED}  ✗ Failed to pull images (timeout or error)${NC}" | tee -a "$LOG_FILE"
+            FAILED_STACKS+=("$stack_name (pull failed)")
+            echo "" | tee -a "$LOG_FILE"
+            continue
+        fi
+    fi
+
+    # Get new image digests
+    AFTER_DIGESTS=$(get_image_digests "$compose_file")
+
+    # Check if anything actually changed
+    if [ "$BEFORE_DIGESTS" != "$AFTER_DIGESTS" ] && [ "$BEFORE_DIGESTS" != "ERROR" ]; then
+        echo "  → Recreating containers..." | tee -a "$LOG_FILE"
+
+        if [ "$DRY_RUN" = true ]; then
+            echo -e "${YELLOW}  [DRY-RUN] Would recreate containers${NC}" | tee -a "$LOG_FILE"
+            UPDATED_STACKS+=("$stack_name (dry-run)")
+        elif docker compose -f "$compose_file" up -d 2>&1 | tee -a "$LOG_FILE"; then
+            # Check if containers are actually running
+            RUNNING_COUNT=$(docker compose -f "$compose_file" ps --format json 2>/dev/null | jq -s 'map(select(.State == "running")) | length' 2>/dev/null || echo "0")
+            TOTAL_COUNT=$(docker compose -f "$compose_file" ps --format json 2>/dev/null | jq -s 'length' 2>/dev/null || echo "0")
+
+            if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ] && [ "$TOTAL_COUNT" -gt 0 ]; then
+                echo -e "${GREEN}  ✓ Updated successfully ($RUNNING_COUNT/$TOTAL_COUNT containers running)${NC}" | tee -a "$LOG_FILE"
+                UPDATED_STACKS+=("$stack_name")
+            else
+                echo -e "${YELLOW}  ⚠ Updated but some containers not running ($RUNNING_COUNT/$TOTAL_COUNT)${NC}" | tee -a "$LOG_FILE"
+                WARNINGS+=("$stack_name: Only $RUNNING_COUNT/$TOTAL_COUNT containers running")
+                UPDATED_STACKS+=("$stack_name (with warnings)")
+            fi
+        else
+            echo -e "${RED}  ✗ Failed to recreate containers${NC}" | tee -a "$LOG_FILE"
+            FAILED_STACKS+=("$stack_name (container recreation failed)")
+        fi
+    else
+        echo -e "  ⏭  No updates available" | tee -a "$LOG_FILE"
+        NO_UPDATES+=("$stack_name")
+    fi
+
+    echo "" | tee -a "$LOG_FILE"
+done
+
+# Cleanup unused images
+echo -e "${BLUE}═══ Cleanup ═══${NC}" | tee -a "$LOG_FILE"
+echo "→ Removing dangling images..." | tee -a "$LOG_FILE"
+
+DANGLING_BEFORE=$(docker images -f "dangling=true" -q | wc -l)
+if [ "$DANGLING_BEFORE" -gt 0 ]; then
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}  [DRY-RUN] Would remove $DANGLING_BEFORE dangling images${NC}" | tee -a "$LOG_FILE"
+    else
+        docker image prune -f 2>&1 | tee -a "$LOG_FILE"
+        DANGLING_AFTER=$(docker images -f "dangling=true" -q | wc -l)
+        CLEANED=$((DANGLING_BEFORE - DANGLING_AFTER))
+        echo -e "${GREEN}  ✓ Removed $CLEANED dangling images${NC}" | tee -a "$LOG_FILE"
+    fi
+else
+    echo "  ⏭  No dangling images to clean" | tee -a "$LOG_FILE"
+fi
+
+echo "" | tee -a "$LOG_FILE"
+
+#########################
+# FINAL REPORT
+#########################
+echo "╔════════════════════════════════════════════════════════════════╗" | tee -a "$LOG_FILE"
+echo "║              DOCKER STACK UPDATE SUMMARY                      ║" | tee -a "$LOG_FILE"
+echo "╚════════════════════════════════════════════════════════════════╝" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+echo -e "${GREEN}✅ UPDATED STACKS (${#UPDATED_STACKS[@]}):${NC}" | tee -a "$LOG_FILE"
+if [ ${#UPDATED_STACKS[@]} -eq 0 ]; then
+    echo "  • None" | tee -a "$LOG_FILE"
+else
+    for stack in "${UPDATED_STACKS[@]}"; do
+        echo "  • $stack" | tee -a "$LOG_FILE"
+    done
+fi
+echo "" | tee -a "$LOG_FILE"
+
+echo -e "${BLUE}⏭️  NO UPDATES NEEDED (${#NO_UPDATES[@]}):${NC}" | tee -a "$LOG_FILE"
+if [ ${#NO_UPDATES[@]} -eq 0 ]; then
+    echo "  • None" | tee -a "$LOG_FILE"
+else
+    for stack in "${NO_UPDATES[@]}"; do
+        echo "  • $stack" | tee -a "$LOG_FILE"
+    done
+fi
+echo "" | tee -a "$LOG_FILE"
+
+if [ ${#FAILED_STACKS[@]} -gt 0 ]; then
+    echo -e "${RED}❌ FAILED STACKS (${#FAILED_STACKS[@]}):${NC}" | tee -a "$LOG_FILE"
+    for stack in "${FAILED_STACKS[@]}"; do
+        echo "  • $stack" | tee -a "$LOG_FILE"
+    done
+    echo "" | tee -a "$LOG_FILE"
+fi
+
+if [ ${#WARNINGS[@]} -gt 0 ]; then
+    echo -e "${YELLOW}⚠️  WARNINGS (${#WARNINGS[@]}):${NC}" | tee -a "$LOG_FILE"
+    for warning in "${WARNINGS[@]}"; do
+        echo "  • $warning" | tee -a "$LOG_FILE"
+    done
+    echo "" | tee -a "$LOG_FILE"
+fi
+
+# Service-specific health checks
+echo -e "${BLUE}🏥 SERVICE HEALTH CHECKS:${NC}" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+# Define services to check
+SERVICES=("plex:Plex" "pihole:Pi-hole" "sonarr:Sonarr" "radarr:Radarr" "bazarr:Bazarr" "prowlarr:Prowlarr")
+
+for service_def in "${SERVICES[@]}"; do
+    IFS=':' read -r service display_name <<< "$service_def"
+    check_service_health "$service" "$display_name"
+done
+
+echo "" | tee -a "$LOG_FILE"
+echo -e "${BLUE}💡 POST-UPDATE RECOMMENDATIONS:${NC}" | tee -a "$LOG_FILE"
+echo "  • Check critical services:" | tee -a "$LOG_FILE"
+echo "    - Plex transcoding: http://plex.lan" | tee -a "$LOG_FILE"
+echo "    - Pi-hole DNS: http://pi.hole/admin" | tee -a "$LOG_FILE"
+echo "    - Sonarr/Radarr: Verify download client connections" | tee -a "$LOG_FILE"
+echo "  • Review logs if warnings present: docker compose -f <file>.yml logs" | tee -a "$LOG_FILE"
+echo "  • Storage check: df -h /mnt/pool" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+
+# Storage summary
+echo -e "${BLUE}💾 STORAGE STATUS:${NC}" | tee -a "$LOG_FILE"
+if [ -d /mnt/pool ]; then
+    df -h /mnt/pool 2>/dev/null | tail -1 | awk '{print "  • mergerfs pool: "$3" used / "$2" total ("$5" used)"}' | tee -a "$LOG_FILE"
+fi
+df -h / | tail -1 | awk '{print "  • Root filesystem: "$3" used / "$2" total ("$5" used)"}' | tee -a "$LOG_FILE"
+
+echo "" | tee -a "$LOG_FILE"
+echo "Completed: $(date)" | tee -a "$LOG_FILE"
+echo "Full log: $LOG_FILE" | tee -a "$LOG_FILE"
+echo "" | tee -a "$LOG_FILE"
+echo "✅ Docker stack update complete." | tee -a "$LOG_FILE"
+
+# Exit with error if any stacks failed
+if [ ${#FAILED_STACKS[@]} -gt 0 ]; then
+    exit 1
+fi

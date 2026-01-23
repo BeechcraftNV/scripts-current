@@ -1,0 +1,25 @@
+#!/bin/bash
+# ncdu_cleanup_cycle - Interactive disk cleanup using ncdu
+
+# List of cleanup targets (customize as needed)
+CLEANUP_DIRS=(
+    "/mnt/media/steven_backup"
+    "/mnt/media/nzbget"
+    "/mnt/media/downloads"
+    "/mnt/media/tmp"
+)
+
+echo "Starting interactive cleanup cycle..."
+echo "Press 'q' to quit ncdu and move to the next target."
+
+for DIR in "${CLEANUP_DIRS[@]}"; do
+    if [ -d "$DIR" ]; then
+        echo -e "\n--- Scanning: $DIR ---"
+        sudo ncdu "$DIR"
+    else
+        echo "Skipping: $DIR (not found)"
+    fi
+done
+
+echo -e "\nCleanup cycle complete."
+

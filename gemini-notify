@@ -1,0 +1,30 @@
+#!/bin/bash
+# gemini-notify - Desktop notification helper for Gemini CLI
+# Sends visual notification and audible alert when task completes
+
+# Title and message for the notification
+TITLE="Gemini CLI"
+MESSAGE="Task complete. Waiting for input."
+
+# 1. Visual Notification
+# -u critical: Urgent priority (stays until dismissed or longer timeout)
+# -t 0: Never expire (some servers ignore this, but it's worth a try for "waiting")
+if command -v notify-send >/dev/null; then
+    notify-send -u critical -a "Gemini" "$TITLE" "$MESSAGE"
+fi
+
+# 2. Audible Alert
+# Try playing a system sound first
+SOUND_FILE="/usr/share/sounds/freedesktop/stereo/complete.oga"
+
+if command -v paplay >/dev/null && [ -f "$SOUND_FILE" ]; then
+    paplay "$SOUND_FILE"
+elif command -v aplay >/dev/null && [ -f "$SOUND_FILE" ]; then
+    aplay -q "$SOUND_FILE"
+elif command -v spd-say >/dev/null; then
+    # Fallback to speech synthesis
+    spd-say "Gemini is waiting"
+else
+    # Ultimate fallback: system bell
+    echo -e "\a"
+fi

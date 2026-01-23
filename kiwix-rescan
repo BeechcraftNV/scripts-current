@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""
+Kiwix ZIM Library Rescan
+Restarts the Kiwix container to pick up new ZIM files from /mnt/pool/zimit
+"""
+
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+def run_command(cmd):
+    """Run a command and return the result"""
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+def main():
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Kiwix ZIM Library Rescan")
+    print("-" * 60)
+
+    # Check if container exists
+    code, stdout, stderr = run_command(["docker", "ps", "-a", "--filter", "name=kiwix", "--format", "{{.Names}}"])
+    if code != 0 or 'kiwix' not in stdout:
+        print("ERROR: Kiwix container not found")
+        sys.exit(1)
+
+    # Get current status
+    code, status, _ = run_command(["docker", "ps", "--filter", "name=kiwix", "--format", "{{.Status}}"])
+    print(f"Current status: {status}")
+
+    # Count ZIM files
+    zim_path = Path("/mnt/pool/zimit")
+    zim_count = len(list(zim_path.glob("*.zim"))) if zim_path.exists() else 0
+    print(f"ZIM files found: {zim_count}")
+
+    # Restart container
+    print("\nRestarting Kiwix container...")
+    code, stdout, stderr = run_command(["docker", "restart", "kiwix"])
+
+    if code == 0:
+        print(f"✓ Container restarted successfully")
+        print(f"\nKiwix is now serving {zim_count} ZIM file(s)")
+        print(f"Access at: http://localhost:8473")
+    else:
+        print(f"✗ Error restarting container: {stderr}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# plex-preopt — Pre-optimize media for Plex (VAAPI if available).
+# - Remuxes compatible files (H.264/AAC ≤1080p) into MP4 instantly.
+# - Transcodes others with Intel VAAPI (fallback to CPU if needed).
+# - Mirrors source tree under OUT_ROOT, keeps mtimes, idempotent.
+# - Safe to run repeatedly; only rebuilds when source is newer.
+# - Accepts optional CLI paths to limit scope (e.g., one show/movie).
+
+set -euo pipefail
+IFS=$'\n\t'
+
+########################
+# ----- Config -----  #
+########################
+
+# Default input roots; can be overridden by CLI args
+SRC_DIRS=(
+  "/mnt/pool/movies"
+  "/mnt/pool/Movies"
+  "/mnt/pool/tv"
+  "/mnt/pool/TV"
+)
+
+# Output root (mirrors relative structure; outputs .mp4)
+OUT_ROOT="/mnt/pool/optimized"
+
+# Logs
+LOG_DIR="/var/log/plex-preopt"
+
+# Extensions we consider as video
+EXTS="mkv|mp4|m4v|mov|avi|ts|webm"
+
+# Target video: broad compatibility
+V_CODEC_VAAPI="h264_vaapi"
+V_CODEC_CPU="libx264"
+# Bitrate/quality (VAAPI prefers CBR-like settings)
+V_BITRATE="6M"
+V_BUFSIZE="12M"
+# CPU preset/tune (used only when VAAPI unavailable)
+X264_PRESET="veryfast"
+X264_TUNE="film"
+
+# Max resolution (downscale larger sources)
+MAX_WIDTH=1920
+MAX_HEIGHT=1080
+
+# Audio presets (adaptive: 5.1 -> EAC3, else stereo AAC)
+AAC_BR="192k"
+EAC3_BR="640k"
+
+# Subtitles: convert to mov_text for MP4 container (will skip if incompatible)
+SUB_CODEC="mov_text"
+
+# Nice/ionice to keep it gentle while catching up
+NICE_PREFIX=(ionice -c3 nice -n 15)
+
+# Optional: set to true to do a dry run (no writes)
+DRY_RUN="${DRY_RUN:-false}"
+
+############################
+# ----- Preflight -----   #
+############################
+
+mkdir -p "$LOG_DIR"
+log() { echo "[$(date +'%F %T')] $*" | tee -a "$LOG_DIR/run.log" ; }
+
+need_tool() {
+  command -v "$1" >/dev/null 2>&1 || { echo "Missing required tool: $1"; exit 1; }
+}
+need_tool ffprobe
+need_tool ffmpeg
+need_tool find
+
+# Allow limiting scope via CLI: e.g., `plex-preopt "/mnt/pool/movies/Top Gun (1986)"`
+if [[ $# -gt 0 ]]; then
+  SRC_DIRS=("$@")
+  log "Overriding SRC_DIRS with CLI args: ${SRC_DIRS[*]}"
+fi
+
+# Detect VAAPI availability; fall back to CPU if not present
+USE_VAAPI=false
+if [[ -e /dev/dri/renderD128 || -e /dev/dri/card0 ]]; then
+  # quick probe: this is cheap and doesn’t spam logs
+  if ffmpeg -hide_banner -v error -hwaccel vaapi -init_hw_device vaapi=va:/dev/dri/renderD128 -f lavfi -i color=size=16x16:rate=1 -frames:v 1 -f null - >/dev/null 2>&1; then
+    USE_VAAPI=true
+  fi
+fi
+if $USE_VAAPI; then
+  log "Hardware acceleration: VAAPI detected and enabled."
+else
+  log "Hardware acceleration: NOT available — will use CPU (libx264)."
+fi
+
+############################
+# ----- Helpers -----     #
+############################
+
+# Make output path under OUT_ROOT, with .mp4 extension
+make_out_path() {
+  local in="$1" rel=""
+  for s in "${SRC_DIRS[@]}"; do
+    # normalize trailing slash
+    local base="${s%/}/"
+    if [[ "${in%/}" == ${base%/}* ]]; then
+      rel="${in#"$base"}"
+      break
+    fi
+  done
+  [[ -z "$rel" ]] && rel="${in#/}"                # fallback: absolute->relative
+  rel="${rel%.*}.mp4"
+  echo "$OUT_ROOT/$rel"
+}
+
+# Probe helpers (return single values or blank)
+probe_vcodec() { ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$1" 2>/dev/null || true; }
+probe_acodec() { ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$1" 2>/dev/null || true; }
+probe_width()  { ffprobe -v error -select_streams v:0 -show_entries stream=width      -of default=nw=1:nk=1 "$1" 2>/dev/null || true; }
+probe_height() { ffprobe -v error -select_streams v:0 -show_entries stream=height     -of default=nw=1:nk=1 "$1" 2>/dev/null || true; }
+probe_achans() { ffprobe -v error -select_streams a:0 -show_entries stream=channels   -of default=nw=1:nk=1 "$1" 2>/dev/null || true; }
+
+# Should we remux (copy) to MP4 w/o re-encode?
+# Criteria: H.264 video, AAC audio, <=1080p
+is_remux_ok() {
+  local f="$1"
+  local v a w h
+  v=$(probe_vcodec "$f"); a=$(probe_acodec "$f")
+  w=$(probe_width "$f");  h=$(probe_height "$f")
+  [[ "$v" == "h264" ]] && [[ "$a" == "aac" ]] \
+    && [[ "${w:-0}" -le $MAX_WIDTH ]] && [[ "${h:-0}" -le $MAX_HEIGHT ]]
+}
+
+# Decide audio target based on source channel count
+# >=6ch -> EAC3 5.1; else AAC stereo
+pick_audio_args() {
+  local f="$1"
+  local ch; ch=$(probe_achans "$f"); ch=${ch:-2}
+  if [[ "$ch" -ge 6 ]]; then
+    echo "-c:a eac3 -b:a $EAC3_BR -ac 6"
+  else
+    echo "-c:a aac  -b:a $AAC_BR  -ac 2"
+  fi
+}
+
+encode_one() {
+  local in="$1"
+  local out tmp dirinfo
+  out=$(make_out_path "$in")
+  tmp="${out}.tmp.mp4"
+  mkdir -p "$(dirname "$out")"
+
+  # Skip if output exists and is newer than source
+  if [[ -f "$out" && "$out" -nt "$in" ]]; then
+    log "Skip (up-to-date): $out"
+    return 0
+  fi
+
+  # Remux path
+  if is_remux_ok "$in"; then
+    log "Remux → MP4 (no re-encode): $in"
+    if [[ "$DRY_RUN" == "true" ]]; then
+      log "DRY_RUN: would remux to $out"
+      return 0
+    fi
+    "${NICE_PREFIX[@]}" ffmpeg -hide_banner -y -nostdin \
+      -i "$in" \
+      -map 0:v:0 -map 0:a:0? -map 0:s? \
+      -c:v copy \
+      -c:a copy \
+      -c:s $SUB_CODEC \
+      -movflags +faststart \
+      "$tmp" >>"$LOG_DIR/ffmpeg.log" 2>&1
+
+    mv -f "$tmp" "$out"
+    touch -r "$in" "$out"
+    log "Wrote: $out"
+    return 0
+  fi
+
+  # Transcode path
+  local w h vf_chain audio_args
+  w=$(probe_width "$in"); h=$(probe_height "$in")
+  audio_args=$(pick_audio_args "$in")
+
+  if $USE_VAAPI; then
+    vf_chain="format=nv12,hwupload"
+    if [[ "${w:-0}" -gt $MAX_WIDTH || "${h:-0}" -gt $MAX_HEIGHT ]]; then
+      vf_chain="$vf_chain,scale_vaapi=w=${MAX_WIDTH}:h=${MAX_HEIGHT}:force_original_aspect_ratio=decrease"
+    fi
+    log "Transcode (VAAPI): $in"
+    if [[ "$DRY_RUN" == "true" ]]; then
+      log "DRY_RUN: would VAAPI transcode to $out"
+      return 0
+    fi
+    "${NICE_PREFIX[@]}" ffmpeg -hide_banner -y -nostdin \
+      -hwaccel vaapi -hwaccel_output_format vaapi \
+      -i "$in" \
+      -map 0:v:0 -map 0:a:0? -map 0:s? \
+      -vf "$vf_chain" \
+      -c:v $V_CODEC_VAAPI -b:v $V_BITRATE -maxrate $V_BITRATE -bufsize $V_BUFSIZE \
+      $audio_args \
+      -c:s $SUB_CODEC \
+      -movflags +faststart \
+      "$tmp" >>"$LOG_DIR/ffmpeg.log" 2>&1
+  else
+    # CPU fallback (libx264)
+    local scale=""
+    if [[ "${w:-0}" -gt $MAX_WIDTH || "${h:-0}" -gt $MAX_HEIGHT ]]; then
+      scale="-vf scale=w=${MAX_WIDTH}:h=${MAX_HEIGHT}:force_original_aspect_ratio=decrease"
+    fi
+    log "Transcode (CPU libx264): $in"
+    if [[ "$DRY_RUN" == "true" ]]; then
+      log "DRY_RUN: would CPU transcode to $out"
+      return 0
+    fi
+    "${NICE_PREFIX[@]}" ffmpeg -hide_banner -y -nostdin \
+      -i "$in" \
+      -map 0:v:0 -map 0:a:0? -map 0:s? \
+      $scale \
+      -c:v $V_CODEC_CPU -preset $X264_PRESET -tune $X264_TUNE -crf 20 -maxrate $V_BITRATE -bufsize $V_BUFSIZE \
+      $audio_args \
+      -c:s $SUB_CODEC \
+      -movflags +faststart \
+      "$tmp" >>"$LOG_DIR/ffmpeg.log" 2>&1
+  fi
+
+  mv -f "$tmp" "$out"
+  touch -r "$in" "$out"
+  log "Wrote: $out"
+}
+
+############################
+# ----- Main loop -----   #
+############################
+
+CANDIES=$(find "${SRC_DIRS[@]}" -regextype posix-extended -type f -iregex '.*\.(mkv|mp4|m4v|mov|avi|ts|webm)$' | wc -l || echo 0)
+
+
+for D in "${SRC_DIRS[@]}"; do
+  if [[ -d "$D" ]]; then
+    # NUL-delimited to handle spaces in names
+    while IFS= read -r -d '' f; do
+  encode_one "$f"
+done < <(find "$D" -regextype posix-extended -type f -iregex '.*\.(mkv|mp4|m4v|mov|avi|ts|webm)$' -print0)
+
+  else
+    log "Missing source dir: $D"
+  fi
+done
+
+log "----- End run -----"
+
