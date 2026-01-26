@@ -39,11 +39,11 @@ if command -v npx &> /dev/null; then
 fi
 
 echo "=== Updating APT packages ==="
-if sudo apt update 2>&1 | tee "$APT_OUTPUT"; then
-    UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "Listing..." | wc -l)
-    
+if sudo apt-get update 2>&1 | tee "$APT_OUTPUT"; then
+    UPGRADABLE=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
+
     if [ "$UPGRADABLE" -gt 0 ]; then
-        sudo apt full-upgrade -y 2>&1 | tee -a "$APT_OUTPUT"
+        sudo apt-get full-upgrade -y 2>&1 | tee -a "$APT_OUTPUT"
         UPDATED_ITEMS+=("APT: $UPGRADABLE packages upgraded")
     else
         SKIPPED_ITEMS+=("APT: No packages needed updating")
@@ -67,9 +67,9 @@ else
 fi
 
 echo -e "\n=== Cleaning up unused packages and runtimes ==="
-AUTOREMOVE_COUNT=$(sudo apt autoremove --dry-run 2>/dev/null | grep -c "^Remv" 2>/dev/null) || AUTOREMOVE_COUNT=0
+AUTOREMOVE_COUNT=$(sudo apt-get autoremove --dry-run 2>/dev/null | grep -c "^Remv" 2>/dev/null) || AUTOREMOVE_COUNT=0
 if [ "$AUTOREMOVE_COUNT" -gt 0 ]; then
-    sudo apt autoremove -y
+    sudo apt-get autoremove -y
     UPDATED_ITEMS+=("APT cleanup: Removed $AUTOREMOVE_COUNT orphaned packages")
 else
     SKIPPED_ITEMS+=("APT cleanup: No orphaned packages")
