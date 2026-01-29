@@ -28,7 +28,9 @@ update-all
 
 **Key Features:**
 - Background Gemini CLI update pre-fetch
-- Color-coded comprehensive summary report
+- Color-coded comprehensive summary report (always displays, even if errors occur)
+- Robust error handling - continues execution even if individual steps fail
+- Failed operations tracked and reported separately
 - Kernel version comparison (running vs. installed) to detect reboot needs
 - Streamlined impact assessment
 
@@ -255,11 +257,13 @@ This directory may contain these excluded items locally, but they won't be synce
 - Make scripts executable: `chmod +x script-name`
 
 ### Code Quality
-- Use `set -e` in bash scripts to exit on errors
+- Use `set -e` judiciously in bash scripts (consider if you need graceful degradation)
+- For scripts that should complete and report even with failures, use explicit error checking
 - Use `set -u` in bash scripts to catch undefined variables
 - Include usage/help text for scripts with arguments
 - Add error handling with clear messages
 - Check for required commands before using: `command -v cmd`
+- Use EXIT traps for cleanup and final reporting
 
 ### Common Patterns
 

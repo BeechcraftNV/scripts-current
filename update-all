@@ -2,9 +2,6 @@
 # Save as ~/.local/bin/update-all
 # Comprehensive system update script with Gemini pre-fetch and AI tool reporting
 
-# Exit on error
-set -e
-
 # Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,8 +24,71 @@ CLEANUP_OUTPUT=$(mktemp)
 # Clear the display
 clear
 
-# Cleanup temp files on exit
-trap 'rm -f "$APT_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"' EXIT
+# Function to display the final report
+show_report() {
+    echo -e "\n"
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║                     UPDATE SUMMARY REPORT                      ║"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+
+    echo -e "\n${GREEN}✅ UPDATED (Core System):${NC}"
+    if [ "${#UPDATED_ITEMS[@]}" -eq 0 ]; then
+        echo "  • Nothing was updated"
+    else
+        for item in "${UPDATED_ITEMS[@]}"; do echo "  • $item"; done
+    fi
+
+    echo -e "\n${BLUE}🤖 AI & DEVELOPMENT TOOLS:${NC}"
+    if [ "${#AI_TOOLS[@]}" -eq 0 ]; then
+        echo "  • No tool updates detected"
+    else
+        for tool in "${AI_TOOLS[@]}"; do echo "  • $tool"; done
+    fi
+
+    echo -e "\n${BLUE}⏭️  SKIPPED (Already Current):${NC}"
+    if [ "${#SKIPPED_ITEMS[@]}" -eq 0 ]; then
+        echo "  • No items skipped"
+    else
+        for item in "${SKIPPED_ITEMS[@]}"; do echo "  • $item"; done
+    fi
+
+    if [ "${#FAILED_ITEMS[@]}" -gt 0 ]; then
+        echo -e "\n${RED}❌ FAILED:${NC}"
+        for item in "${FAILED_ITEMS[@]}"; do echo "  • $item"; done
+    fi
+
+    if [ "${#AVAILABLE_NOT_RUN[@]}" -gt 0 ]; then
+        echo -e "\n${YELLOW}⚠️  MANUAL UPDATES REQUIRED:${NC}"
+        for item in "${AVAILABLE_NOT_RUN[@]}"; do echo "  • $item"; done
+    fi
+
+    # Impact assessment
+    echo -e "\n${BLUE}📊 SYSTEM IMPACT ASSESSMENT:${NC}"
+    TOTAL_UPDATED=$(echo "${UPDATED_ITEMS[@]}" | grep -o "[0-9]\+" | awk '{s+=$1} END {print s+0}' || echo "0")
+
+    if [ "$TOTAL_UPDATED" -eq 0 ]; then
+        echo "  ⚡ Impact: NONE - System was already fully updated"
+    elif [ "$TOTAL_UPDATED" -lt 10 ]; then
+        echo "  ⚡ Impact: LOW - Minor updates applied"
+    else
+        echo "  ⚡ Impact: MODERATE - Significant updates applied"
+    fi
+
+    # Kernel check
+    RUNNING_KERNEL=$(uname -r)
+    INSTALLED_KERNEL=$(dpkg -l | grep "^ii.*linux-image-[0-9]" | grep -v "linux-image-extra" | sort -V | tail -1 | awk '{print $2}' | sed 's/linux-image-//')
+
+    if [ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]; then
+        echo -e "  ${RED}✖ KERNEL MISMATCH: REBOOT REQUIRED${NC}"
+    else
+        echo -e "  ${GREEN}✓ Running the latest kernel ($RUNNING_KERNEL)${NC}"
+    fi
+
+    echo -e "\n✅ Update and Cleanup Complete."
+}
+
+# Cleanup temp files and show report on exit
+trap 'rm -f "$APT_OUTPUT" "$FLATPAK_USER_OUTPUT" "$CLEANUP_OUTPUT"; show_report' EXIT
 
 # --- SILENT BACKGROUND UPDATES ---
 # Pre-warm the Gemini CLI cache in the background 
@@ -40,11 +100,14 @@ fi
 
 echo "=== Updating APT packages ==="
 if sudo apt-get update 2>&1 | tee "$APT_OUTPUT"; then
-    UPGRADABLE=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst")
+    UPGRADABLE=$(apt-get upgrade --dry-run 2>/dev/null | grep -c "^Inst" || echo "0")
 
     if [ "$UPGRADABLE" -gt 0 ]; then
-        sudo apt-get full-upgrade -y 2>&1 | tee -a "$APT_OUTPUT"
-        UPDATED_ITEMS+=("APT: $UPGRADABLE packages upgraded")
+        if sudo apt-get full-upgrade -y 2>&1 | tee -a "$APT_OUTPUT"; then
+            UPDATED_ITEMS+=("APT: $UPGRADABLE packages upgraded")
+        else
+            FAILED_ITEMS+=("APT: Upgrade failed after updating package lists")
+        fi
     else
         SKIPPED_ITEMS+=("APT: No packages needed updating")
     fi
@@ -54,35 +117,48 @@ else
 fi
 
 echo -e "\n=== Updating User Flatpaks ==="
-flatpak update -y 2>&1 | tee "$FLATPAK_USER_OUTPUT"
-if grep -q "Nothing to do" "$FLATPAK_USER_OUTPUT"; then
-    SKIPPED_ITEMS+=("User Flatpak: Already up to date")
-else
-    USER_UPDATES=$(grep -c "Installing\|Updating" "$FLATPAK_USER_OUTPUT" || true)
-    if [ "$USER_UPDATES" -gt 0 ]; then
-        UPDATED_ITEMS+=("User Flatpak: $USER_UPDATES packages updated")
+if flatpak update -y 2>&1 | tee "$FLATPAK_USER_OUTPUT"; then
+    if grep -q "Nothing to do" "$FLATPAK_USER_OUTPUT"; then
+        SKIPPED_ITEMS+=("User Flatpak: Already up to date")
     else
-        UPDATED_ITEMS+=("User Flatpak: Updates applied")
+        USER_UPDATES=$(grep -c "Installing\|Updating" "$FLATPAK_USER_OUTPUT" || true)
+        if [ "$USER_UPDATES" -gt 0 ]; then
+            UPDATED_ITEMS+=("User Flatpak: $USER_UPDATES packages updated")
+        else
+            UPDATED_ITEMS+=("User Flatpak: Updates applied")
+        fi
     fi
+else
+    FAILED_ITEMS+=("User Flatpak: Update failed")
 fi
 
 echo -e "\n=== Cleaning up unused packages and runtimes ==="
-AUTOREMOVE_COUNT=$(sudo apt-get autoremove --dry-run 2>/dev/null | grep -c "^Remv" 2>/dev/null) || AUTOREMOVE_COUNT=0
+AUTOREMOVE_COUNT=$(sudo apt-get autoremove --dry-run 2>/dev/null | grep -c "^Remv" 2>/dev/null || echo "0")
 if [ "$AUTOREMOVE_COUNT" -gt 0 ]; then
-    sudo apt-get autoremove -y
-    UPDATED_ITEMS+=("APT cleanup: Removed $AUTOREMOVE_COUNT orphaned packages")
+    if sudo apt-get autoremove -y; then
+        UPDATED_ITEMS+=("APT cleanup: Removed $AUTOREMOVE_COUNT orphaned packages")
+    else
+        FAILED_ITEMS+=("APT cleanup: Failed to remove orphaned packages")
+    fi
 else
     SKIPPED_ITEMS+=("APT cleanup: No orphaned packages")
 fi
 
 echo "Running flatpak repair (user)..."
-flatpak repair --user 2>&1 | tee -a "$CLEANUP_OUTPUT"
+if flatpak repair --user 2>&1 | tee -a "$CLEANUP_OUTPUT"; then
+    AI_TOOLS+=("Flatpak repair: Completed successfully")
+else
+    FAILED_ITEMS+=("Flatpak repair: Failed")
+fi
 
-UNUSED_USER_FLATPAKS=$(flatpak uninstall --user --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null) || UNUSED_USER_FLATPAKS=0
+UNUSED_USER_FLATPAKS=$(flatpak uninstall --user --unused --dry-run 2>/dev/null | grep -c "^[[:space:]]*[0-9]" 2>/dev/null || echo "0")
 
 if [ "$UNUSED_USER_FLATPAKS" -gt 0 ]; then
-    flatpak uninstall --user --unused -y
-    UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_USER_FLATPAKS unused runtimes/SDKs")
+    if flatpak uninstall --user --unused -y; then
+        UPDATED_ITEMS+=("Flatpak cleanup: Removed $UNUSED_USER_FLATPAKS unused runtimes/SDKs")
+    else
+        FAILED_ITEMS+=("Flatpak cleanup: Failed to remove unused runtimes")
+    fi
 else
     SKIPPED_ITEMS+=("Flatpak cleanup: No unused runtimes")
 fi
@@ -110,60 +186,4 @@ if command -v fwupdmgr &> /dev/null; then
     fi
 fi
 
-#########################
-# FINAL REPORT
-#########################
-echo -e "\n"
-echo "╔════════════════════════════════════════════════════════════════╗"
-echo "║                     UPDATE SUMMARY REPORT                      ║"
-echo "╚════════════════════════════════════════════════════════════════╝"
-
-echo -e "\n${GREEN}✅ UPDATED (Core System):${NC}"
-if [ "${#UPDATED_ITEMS[@]}" -eq 0 ]; then
-    echo "  • Nothing was updated"
-else
-    for item in "${UPDATED_ITEMS[@]}"; do echo "  • $item"; done
-fi
-
-echo -e "\n${BLUE}🤖 AI & DEVELOPMENT TOOLS:${NC}"
-if [ "${#AI_TOOLS[@]}" -eq 0 ]; then
-    echo "  • No tool updates detected"
-else
-    for tool in "${AI_TOOLS[@]}"; do echo "  • $tool"; done
-fi
-
-echo -e "\n${BLUE}⏭️  SKIPPED (Already Current):${NC}"
-if [ "${#SKIPPED_ITEMS[@]}" -eq 0 ]; then
-    echo "  • No items skipped"
-else
-    for item in "${SKIPPED_ITEMS[@]}"; do echo "  • $item"; done
-fi
-
-if [ "${#AVAILABLE_NOT_RUN[@]}" -gt 0 ]; then
-    echo -e "\n${YELLOW}⚠️  MANUAL UPDATES REQUIRED:${NC}"
-    for item in "${AVAILABLE_NOT_RUN[@]}"; do echo "  • $item"; done
-fi
-
-# Impact assessment
-echo -e "\n${BLUE}📊 SYSTEM IMPACT ASSESSMENT:${NC}"
-TOTAL_UPDATED=$(echo "${UPDATED_ITEMS[@]}" | grep -o "[0-9]\+" | awk '{s+=$1} END {print s+0}' || echo "0")
-
-if [ "$TOTAL_UPDATED" -eq 0 ]; then
-    echo "  ⚡ Impact: NONE - System was already fully updated"
-elif [ "$TOTAL_UPDATED" -lt 10 ]; then
-    echo "  ⚡ Impact: LOW - Minor updates applied"
-else
-    echo "  ⚡ Impact: MODERATE - Significant updates applied"
-fi
-
-# Kernel check
-RUNNING_KERNEL=$(uname -r)
-INSTALLED_KERNEL=$(dpkg -l | grep "^ii.*linux-image-[0-9]" | grep -v "linux-image-extra" | sort -V | tail -1 | awk '{print $2}' | sed 's/linux-image-//')
-
-if [ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]; then
-    echo -e "  ${RED}✖ KERNEL MISMATCH: REBOOT REQUIRED${NC}"
-else
-    echo -e "  ${GREEN}✓ Running the latest kernel ($RUNNING_KERNEL)${NC}"
-fi
-
-echo -e "\n✅ Update and Cleanup Complete."
+# Report will be displayed automatically on exit via trap

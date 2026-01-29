@@ -50,7 +50,10 @@ Comprehensive system update script that handles multiple package managers with d
 **Key features:**
 - Background Gemini CLI update pre-fetch
 - Kernel version comparison (running vs. installed) to detect reboot needs
-- Color-coded comprehensive summary report
+- Color-coded comprehensive summary report that **always displays**, even if errors occur
+- Robust error handling - script continues through all sections even if individual steps fail
+- Failed operations tracked separately and displayed in report
+- Uses EXIT trap to guarantee report display on script termination
 
 #### check-systemd-errors
 Reviews recent systemd logs for errors and provides a summary.
