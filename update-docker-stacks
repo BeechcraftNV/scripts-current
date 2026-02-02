@@ -342,17 +342,31 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo "" | tee -a "$LOG_FILE"
 fi
 
-# Service-specific health checks
+# Dynamic health checks for all running containers
 echo -e "${BLUE}🏥 SERVICE HEALTH CHECKS:${NC}" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
-# Define services to check
-SERVICES=("plex:Plex" "pihole:Pi-hole" "sonarr:Sonarr" "radarr:Radarr" "bazarr:Bazarr" "prowlarr:Prowlarr")
+# Get all containers and check their status
+while IFS= read -r container; do
+    if [ -n "$container" ]; then
+        # Capitalize first letter for display
+        display_name="$(echo "$container" | sed 's/\b\(.\)/\u\1/')"
+        status=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo "unknown")
+        health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}' "$container" 2>/dev/null || echo "")
 
-for service_def in "${SERVICES[@]}"; do
-    IFS=':' read -r service display_name <<< "$service_def"
-    check_service_health "$service" "$display_name"
-done
+        if [ "$status" = "running" ]; then
+            if [ "$health" = "healthy" ]; then
+                echo "  ✓ $display_name: Running (healthy)" | tee -a "$LOG_FILE"
+            elif [ "$health" = "unhealthy" ]; then
+                echo -e "  ${YELLOW}⚠ $display_name: Running (unhealthy)${NC}" | tee -a "$LOG_FILE"
+            else
+                echo "  ✓ $display_name: Running" | tee -a "$LOG_FILE"
+            fi
+        else
+            echo -e "  ${RED}✗ $display_name: $status${NC}" | tee -a "$LOG_FILE"
+        fi
+    fi
+done < <(docker ps -a --format '{{.Names}}' | sort)
 
 echo "" | tee -a "$LOG_FILE"
 echo -e "${BLUE}💡 POST-UPDATE RECOMMENDATIONS:${NC}" | tee -a "$LOG_FILE"
