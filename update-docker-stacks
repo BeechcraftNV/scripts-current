@@ -77,6 +77,7 @@ declare -a UPDATED_STACKS=()
 declare -a FAILED_STACKS=()
 declare -a NO_UPDATES=()
 declare -a WARNINGS=()
+declare -A UPDATED_IMAGES=()  # Associative array: stack_name -> list of updated images
 
 echo "=== Docker Stack Update for lmdeserver ===" | tee "$LOG_FILE"
 echo "Started: $(date)" | tee -a "$LOG_FILE"
@@ -140,6 +141,44 @@ get_image_digests() {
     echo "$digests"
 }
 
+# Function to compare digests and extract changed images
+compare_digests() {
+    local before=$1
+    local after=$2
+    local changed_images=""
+
+    # Parse before digests into associative array
+    declare -A before_map
+    while IFS='=' read -r image digest; do
+        if [ -n "$image" ]; then
+            before_map["$image"]="$digest"
+        fi
+    done <<< "$before"
+
+    # Compare with after digests
+    while IFS='=' read -r image digest; do
+        if [ -n "$image" ]; then
+            local before_digest="${before_map[$image]:-}"
+            if [ "$before_digest" != "$digest" ]; then
+                # Extract just the image name without digest for cleaner display
+                local image_name=$(echo "$image" | cut -d'@' -f1)
+
+                # Check if it's a new image or updated
+                if [[ "$before_digest" == "" ]] || [[ "$before_digest" == "NEW:"* ]]; then
+                    changed_images="${changed_images}${image_name} (new)"$'\n'
+                else
+                    # Extract short digest for display (first 12 chars of sha256)
+                    local old_short=$(echo "$before_digest" | grep -oP 'sha256:[a-f0-9]{12}' | head -1 || echo "unknown")
+                    local new_short=$(echo "$digest" | grep -oP 'sha256:[a-f0-9]{12}' | head -1 || echo "unknown")
+                    changed_images="${changed_images}${image_name} (${old_short} → ${new_short})"$'\n'
+                fi
+            fi
+        fi
+    done <<< "$after"
+
+    echo "$changed_images"
+}
+
 # Function to check service health
 check_service_health() {
     local service=$1
@@ -194,6 +233,10 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
 
     # Check if anything actually changed
     if [ "$BEFORE_DIGESTS" != "$AFTER_DIGESTS" ] && [ "$BEFORE_DIGESTS" != "ERROR" ]; then
+        # Identify which images changed
+        CHANGED_IMAGES=$(compare_digests "$BEFORE_DIGESTS" "$AFTER_DIGESTS")
+        UPDATED_IMAGES["$stack_name"]="$CHANGED_IMAGES"
+
         echo "  → Recreating containers..." | tee -a "$LOG_FILE"
 
         if [ "$DRY_RUN" = true ]; then
@@ -257,7 +300,18 @@ if [ ${#UPDATED_STACKS[@]} -eq 0 ]; then
     echo "  • None" | tee -a "$LOG_FILE"
 else
     for stack in "${UPDATED_STACKS[@]}"; do
+        # Remove the " (dry-run)" and " (with warnings)" suffixes for lookup
+        stack_key=$(echo "$stack" | sed 's/ (dry-run)$//' | sed 's/ (with warnings)$//')
         echo "  • $stack" | tee -a "$LOG_FILE"
+
+        # Show which images were updated for this stack
+        if [ -n "${UPDATED_IMAGES[$stack_key]:-}" ]; then
+            while IFS= read -r image_info; do
+                if [ -n "$image_info" ]; then
+                    echo "    └─ $image_info" | tee -a "$LOG_FILE"
+                fi
+            done <<< "${UPDATED_IMAGES[$stack_key]}"
+        fi
     done
 fi
 echo "" | tee -a "$LOG_FILE"
