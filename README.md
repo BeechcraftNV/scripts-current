@@ -24,7 +24,10 @@ update-all
 **What it reports:**
 - Gemini CLI update status
 - Docker dangling images
-- Firmware updates (fwupdmgr)
+- NPM & PIP outdated packages
+- Firmware updates (fwupdmgr & System76)
+- Flatpak EOL runtimes
+- Kernel mismatch and reboot requirements (with package list)
 
 **Key Features:**
 - Background Gemini CLI update pre-fetch
