@@ -22,7 +22,6 @@ update-all
 - Cleans unused user Flatpak runtimes/SDKs
 
 **What it reports:**
-- Gemini CLI update status
 - Docker dangling images
 - NPM & PIP outdated packages
 - Firmware updates (fwupdmgr & System76)
@@ -30,7 +29,6 @@ update-all
 - Kernel mismatch and reboot requirements (with package list)
 
 **Key Features:**
-- Background Gemini CLI update pre-fetch
 - Color-coded comprehensive summary report (always displays, even if errors occur)
 - Robust error handling - continues execution even if individual steps fail
 - Failed operations tracked and reported separately
@@ -40,7 +38,6 @@ update-all
 **Requirements:**
 - sudo access for APT operations
 - Bash shell
-- `npx` (optional, for Gemini CLI updates)
 
 ---
 
