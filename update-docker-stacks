@@ -261,7 +261,32 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
         fi
     else
         echo -e "  ⏭  No updates available" | tee -a "$LOG_FILE"
-        NO_UPDATES+=("$stack_name")
+
+        # Even without updates, check if containers are stopped and restart them
+        RUNNING_COUNT=$(docker compose -f "$compose_file" ps --format json 2>/dev/null | jq -s 'map(select(.State == "running")) | length' 2>/dev/null || echo "0")
+        TOTAL_COUNT=$(docker compose -f "$compose_file" ps --format json 2>/dev/null | jq -s 'length' 2>/dev/null || echo "0")
+        EXITED_COUNT=$((TOTAL_COUNT - RUNNING_COUNT))
+
+        if [ "$EXITED_COUNT" -gt 0 ]; then
+            echo -e "${YELLOW}  ⚠ Found $EXITED_COUNT stopped container(s), restarting...${NC}" | tee -a "$LOG_FILE"
+            if [ "$DRY_RUN" = true ]; then
+                echo -e "${YELLOW}  [DRY-RUN] Would restart stopped containers${NC}" | tee -a "$LOG_FILE"
+            elif docker compose -f "$compose_file" up -d 2>&1 | tee -a "$LOG_FILE"; then
+                RUNNING_COUNT=$(docker compose -f "$compose_file" ps --format json 2>/dev/null | jq -s 'map(select(.State == "running")) | length' 2>/dev/null || echo "0")
+                if [ "$RUNNING_COUNT" -eq "$TOTAL_COUNT" ]; then
+                    echo -e "${GREEN}  ✓ Restarted successfully ($RUNNING_COUNT/$TOTAL_COUNT containers running)${NC}" | tee -a "$LOG_FILE"
+                    UPDATED_STACKS+=("$stack_name (restarted)")
+                else
+                    echo -e "${YELLOW}  ⚠ Some containers still not running ($RUNNING_COUNT/$TOTAL_COUNT)${NC}" | tee -a "$LOG_FILE"
+                    WARNINGS+=("$stack_name: Failed to restart all containers")
+                fi
+            else
+                echo -e "${RED}  ✗ Failed to restart containers${NC}" | tee -a "$LOG_FILE"
+                WARNINGS+=("$stack_name: $EXITED_COUNT container(s) still stopped")
+            fi
+        else
+            NO_UPDATES+=("$stack_name")
+        fi
     fi
 
     echo "" | tee -a "$LOG_FILE"
@@ -300,8 +325,8 @@ if [ ${#UPDATED_STACKS[@]} -eq 0 ]; then
     echo "  • None" | tee -a "$LOG_FILE"
 else
     for stack in "${UPDATED_STACKS[@]}"; do
-        # Remove the " (dry-run)" and " (with warnings)" suffixes for lookup
-        stack_key=$(echo "$stack" | sed 's/ (dry-run)$//' | sed 's/ (with warnings)$//')
+        # Remove suffixes for lookup
+        stack_key=$(echo "$stack" | sed 's/ (dry-run)$//' | sed 's/ (with warnings)$//' | sed 's/ (restarted)$//')
         echo "  • $stack" | tee -a "$LOG_FILE"
 
         # Show which images were updated for this stack
