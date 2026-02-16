@@ -4,6 +4,8 @@ lazydocker
 logseq
 uv
 uvx
+fastapi
+uvicorn
 *.AppImage
 *.deb
 *.rpm
