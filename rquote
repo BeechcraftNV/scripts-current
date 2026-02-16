@@ -1,1 +1,42 @@
-/home/steven/.bashrc.d/bin/quote
+#!/bin/bash
+
+VERSION="1.0.0"
+
+# Fetch quotes or jokes based on category
+CATEGORY=$1
+
+show_help() {
+    echo "Usage: rquote [CATEGORY]"
+    echo ""
+    echo "A simple CLI tool to fetch random quotes or jokes."
+    echo ""
+    echo "Categories:"
+    echo "  tech, linux, prog   Get a programming joke"
+    echo "  advice              Get a random piece of advice"
+    echo "  [empty]             Get an inspirational quote (default)"
+    echo ""
+    echo "Options:"
+    echo "  --help              Show this help message"
+    echo "  --version           Show version information"
+}
+
+case "$CATEGORY" in
+    "--help")
+        show_help
+        ;;
+    "--version")
+        echo "rquote version $VERSION"
+        ;;
+    "tech"|"linux"|"prog")
+        # Programming jokes from JokeAPI
+        curl -s "https://v2.jokeapi.dev/joke/Programming?blacklistFlags=nsfw,religious,political,racist,sexist,explicit&type=single" | jq -r '"\n\(.joke)\n"'
+        ;;
+    "advice")
+        # Random advice from AdviceSlip
+        curl -s "https://api.adviceslip.com/advice" | jq -r '"\n\(.slip.advice)\n"'
+        ;;
+    *)
+        # Default to ZenQuotes (Spiritual/Inspirational)
+        curl -s --max-time 3 https://zenquotes.io/api/random | jq -r '.[0] | "\n\"\(.q)\"\n — \(.a)\n"'
+        ;;
+esac
