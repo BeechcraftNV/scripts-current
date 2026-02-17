@@ -2,6 +2,8 @@
 # gemini-notify - Desktop notification helper for Gemini CLI
 # Sends visual notification and audible alert when task completes
 
+set -euo pipefail
+
 # Title and message for the notification
 TITLE="Gemini CLI"
 MESSAGE="Task complete. Waiting for input."

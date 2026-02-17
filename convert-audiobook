@@ -3,7 +3,7 @@
 # convert-audiobook - Convert directory of MP3s to M4B audiobook
 # Usage: ./convert-audiobook <input_directory> [output_file]
 
-set -e  # Exit on error
+set -euo pipefail  # Exit on error, undefined vars, and pipe failures
 
 # Check arguments
 if [ $# -lt 1 ]; then

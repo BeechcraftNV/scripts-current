@@ -1,6 +1,8 @@
 #!/bin/bash
 # ncdu_cleanup_cycle - Interactive disk cleanup using ncdu
 
+set -euo pipefail
+
 # List of cleanup targets (customize as needed)
 CLEANUP_DIRS=(
     "/mnt/media/steven_backup"

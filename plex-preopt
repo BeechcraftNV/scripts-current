@@ -232,16 +232,12 @@ encode_one() {
 # ----- Main loop -----   #
 ############################
 
-CANDIES=$(find "${SRC_DIRS[@]}" -regextype posix-extended -type f -iregex '.*\.(mkv|mp4|m4v|mov|avi|ts|webm)$' | wc -l || echo 0)
-
-
 for D in "${SRC_DIRS[@]}"; do
   if [[ -d "$D" ]]; then
     # NUL-delimited to handle spaces in names
     while IFS= read -r -d '' f; do
-  encode_one "$f"
-done < <(find "$D" -regextype posix-extended -type f -iregex '.*\.(mkv|mp4|m4v|mov|avi|ts|webm)$' -print0)
-
+      encode_one "$f"
+    done < <(find "$D" -regextype posix-extended -type f -iregex '.*\.(mkv|mp4|m4v|mov|avi|ts|webm)$' -print0)
   else
     log "Missing source dir: $D"
   fi

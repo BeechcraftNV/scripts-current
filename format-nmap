@@ -3,6 +3,8 @@
 # format-nmap - A simple, emoji-fied wrapper for nmap discovery
 # Detects network automatically and formats output with emojis
 
+set -euo pipefail
+
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'

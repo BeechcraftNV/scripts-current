@@ -2,7 +2,7 @@
 # Sync scripts repository with GitHub
 # Usage: sync-scripts
 
-set -e
+set -euo pipefail
 
 REPO_DIR="$HOME/.local/bin"
 

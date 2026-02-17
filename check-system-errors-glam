@@ -1,6 +1,8 @@
 #!/bin/bash
 # check-systemd-glam: A smart systemd error troubleshooter
 
+set -euo pipefail
+
 # 1. Ask the user for the time period using Gum (better than manual typing)
 TIME_PERIOD=$(gum choose --header "Check errors from when?" "1 hour ago" "today" "yesterday" "custom")
 
