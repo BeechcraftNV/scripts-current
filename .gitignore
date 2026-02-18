@@ -6,7 +6,6 @@ uv
 uvx
 fastapi
 uvicorn
-subliminal
 *.AppImage
 *.deb
 *.rpm
