@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Sync arr app backups and downloader configs to /mnt/backups/media-settings/
+
+set -euo pipefail
+
+DEST="/mnt/backups/media-settings"
+CONFIGS="/opt/docker/configs"
+
+rsync_to() {
+    local src="$1" dst="$2"
+    mkdir -p "$dst"
+    rsync -a "$src" "$dst"
+}
+
+# Arr apps — use their built-in scheduled backup zips
+rsync_to "$CONFIGS/sonarr/Backups/"   "$DEST/sonarr/"
+rsync_to "$CONFIGS/radarr/Backups/"   "$DEST/radarr/"
+rsync_to "$CONFIGS/prowlarr/Backups/" "$DEST/prowlarr/"
+rsync_to "$CONFIGS/bazarr/backup/"    "$DEST/bazarr/"
+
+# Downloaders — flat config files
+rsync_to "$CONFIGS/sabnzbd/sabnzbd.ini" "$DEST/sabnzbd/"
+rsync_to "$CONFIGS/nzbget/nzbget.conf"  "$DEST/nzbget/"
+
+# NZBHydra2 — config file + its own backup dir
+rsync_to "$CONFIGS/nzbhydra2/nzbhydra.yml"  "$DEST/nzbhydra2/"
+rsync_to "$CONFIGS/nzbhydra2/backup/"       "$DEST/nzbhydra2/backup/"
