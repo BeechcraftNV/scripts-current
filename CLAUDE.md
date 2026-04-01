@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-Personal utility scripts directory (`~/.local/bin`) synced to `git@github.com:BeechcraftNV/scripts-current.git`.
+Personal utility scripts directory (`~/bin`) synced to `git@github.com:BeechcraftNV/scripts-current.git`.
 
 **Tracked:** Bash/Python scripts and documentation
 **Ignored:** Binaries, symlinks (claude, zed), AppImages, .claude/, temp files (see .gitignore)

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPO_DIR="$HOME/.local/bin"
+REPO_DIR="$HOME/bin"
 
 cd "$REPO_DIR"
 
@@ -23,7 +23,7 @@ if ! git diff-index --quiet HEAD -- 2>/dev/null; then
     git status --short
     echo ""
     echo "Tip: Run these commands to commit:"
-    echo "  cd ~/.local/bin"
+    echo "  cd ~/bin"
     echo "  git add <files>"
     echo "  git commit -m 'your message'"
     echo "  git push"
