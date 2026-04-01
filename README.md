@@ -1,6 +1,6 @@
 # Personal Utility Scripts
 
-This repository contains personal utility scripts for system maintenance and automation, stored in `~/.local/bin`.
+This repository contains personal utility scripts for system maintenance and automation, stored in `~/bin`.
 
 **Git Repository:** `git@github.com:BeechcraftNV/scripts-current.git`
 
@@ -178,26 +178,24 @@ sort_raindrops
 ### Clone the Repository
 
 ```bash
-git clone git@github.com:BeechcraftNV/scripts-current.git ~/.local/bin-temp
-cp ~/.local/bin-temp/* ~/.local/bin/
-rm -rf ~/.local/bin-temp
+git clone git@github.com:BeechcraftNV/scripts-current.git ~/bin
 ```
 
-Or manually place scripts in `~/.local/bin/`.
+Or manually place scripts in `~/bin/`.
 
 ### Add to PATH
 
-The `~/.local/bin` directory is typically already in your PATH on Ubuntu/Debian systems (configured in `~/.profile`).
+The `~/bin` directory is typically already in your PATH on Ubuntu/Debian systems (configured in `~/.profile`).
 
 To verify:
 ```bash
-echo $PATH | grep -o "$HOME/.local/bin"
+echo $PATH | grep -o "$HOME/bin"
 ```
 
 If not in PATH, add to `~/.profile`:
 ```bash
-if [ -d "$HOME/.local/bin" ] ; then
-    PATH="$HOME/.local/bin:$PATH"
+if [ -d "$HOME/bin" ] ; then
+    PATH="$HOME/bin:$PATH"
 fi
 ```
 
@@ -209,37 +207,60 @@ source ~/.profile
 ### Make Scripts Executable
 
 ```bash
-chmod +x ~/.local/bin/update-all
-chmod +x ~/.local/bin/check-systemd-errors
+chmod +x ~/bin/update-all
+chmod +x ~/bin/check-systemd-errors
 ```
 
 ## Repository Structure
 
 ```
-~/.local/bin/
+~/bin/
 ├── .gitignore                        # Excludes binaries and temp files
 ├── CLAUDE.md                         # Claude Code guidance
 ├── README.md                         # This file
 ├── GEMINI.md, Gemini.md              # Additional documentation
+├── SCRIPT_AUDIT.md                   # Script inventory and audit log
+├── Docker-update-fix.md              # Docker update notes
+├── backup-media-settings             # Backs up media app settings
 ├── check-systemd-errors              # Systemd error checker
+├── check-system-errors-glam          # Systemd error checker (glamour variant)
 ├── check-systemd-errors-howto.md     # Usage guide
+├── check-md-before-git.sh            # Pre-commit markdown checker
+├── convert-audiobook                 # MP3 to M4B audiobook converter
+├── delete-gh-repos                   # GitHub repository bulk deletion tool
+├── disable-sleep                     # Prevents system sleep
+├── dotpull.sh                        # Updates dotfiles via chezmoi
+├── fix-vaapi                         # Configures Intel hardware acceleration
 ├── format-nmap                       # nmap output formatter
+├── fresh                             # Fresh install helper
+├── fresh-editor                      # Fresh install editor setup
+├── gemini-notify                     # Desktop notification helper for Gemini CLI
+├── kiwix-rescan                      # Restarts Kiwix container for new ZIM files
 ├── lan-scanner                       # Comprehensive LAN device scanner
+├── morning-tabs                      # Opens morning routine URLs
+├── morning-urls.txt                  # URL list for morning-tabs
+├── ncdu_cleanup_cycle                # Interactive disk usage cleanup
+├── plex_analyzer.py                  # Analyzes media for Plex direct play
+├── plex-preopt                       # Primary video optimization pipeline
+├── plex-preopt-single-test           # Test encoder for single file verification
+├── rquote                            # Random quote utility
 ├── sort_raindrops                    # Raindrop.io bookmark sorter
 ├── sync-scripts                      # Repository sync helper
-└── update-all                        # System update script
+├── update-all                        # System update script
+├── update-docker-stacks              # Docker Compose stack updater
+└── yt-dlp                            # YouTube/media downloader binary
 ```
 
 ### What's Tracked in Git
 
 **Committed to repository:**
-- Shell scripts (update-all, check-systemd-errors, sync-scripts, lan-scanner, format-nmap)
-- Python scripts (sort_raindrops)
+- Shell scripts (update-all, check-systemd-errors, sync-scripts, lan-scanner, format-nmap, and more)
+- Python scripts (sort_raindrops, plex_analyzer.py)
 - Documentation files (CLAUDE.md, README.md, GEMINI.md, etc.)
 - Configuration (.gitignore)
 
 **Excluded from version control:**
-- Binary executables (logseq, uv, uvx)
+- Binary executables (chezmoi, lazydocker, logseq, uv, uvx)
 - Application symlinks (claude, zed)
 - Python bytecode and virtual environments
 - Editor directories (.vscode/, .idea/)

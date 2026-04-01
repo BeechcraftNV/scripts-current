@@ -1,6 +1,6 @@
-# Script Audit Report: ~/.local/bin/
+# Script Audit Report: ~/bin/
 
-Last updated: 2026-01-23
+Last updated: 2026-04-01
 
 This report documents the active scripts and utilities in the local binary directory.
 
@@ -19,7 +19,12 @@ This report documents the active scripts and utilities in the local binary direc
 | `delete-gh-repos` | GitHub repository bulk deletion tool |
 | `gemini-notify` | Desktop notification helper for Gemini CLI |
 | `morning-tabs` | Opens morning routine URLs in Brave browser |
-| `build-welcome-site` | Builds/deploys LAN welcome page with Hugo/Caddy |
+| `backup-media-settings` | Backs up media application settings |
+| `check-system-errors-glam` | Systemd error checker with glamour rendering |
+| `fresh` | Fresh system install helper |
+| `fresh-editor` | Fresh install editor setup |
+| `rquote` | Random quote display utility |
+| `yt-dlp` | YouTube/media downloader (updated binary) |
 
 ## Active Media Utilities
 
@@ -53,5 +58,6 @@ This report documents the active scripts and utilities in the local binary direc
 
 ## Audit History
 
+- **2026-04-01**: Migrated scripts directory from `~/.local/bin` to `~/bin`, synced with GitHub repo; added backup-media-settings, check-system-errors-glam, fresh, fresh-editor, rquote, yt-dlp; removed build-welcome-site
 - **2026-01-23**: Cleaned up duplicate shebangs in 4 scripts, improved morning-tabs error handling
 - **Previous**: Removed obsolete one-off migration/setup scripts (media_ext4_migration, setup-mergerfs-pool, etc.)
