@@ -97,7 +97,7 @@ sync-scripts
 
 ### lan-scanner
 
-Comprehensive LAN device scanner that discovers both active and sleeping devices on your network with deep-scan capabilities.
+Comprehensive LAN device scanner that discovers both active and sleeping devices on your network with deep-scan capabilities and custom labeling.
 
 **Usage:**
 ```bash
@@ -105,15 +105,17 @@ lan-scanner [options]
 ```
 
 **Options:**
-- `-d, --deep`: Perform a deep scan (Top 100 ports + service detection)
+- `-d, --deep`: Perform a deep scan (Top 100 ports + HTTP title + service detection)
 - `-h, --help`: Show help message
 
 **Features:**
+- **Custom Labels**: Assign friendly names to devices via `~/.config/lan-scanner/labels.conf`.
+- **HTTP Title Detection**: Automatically grabs web page titles in deep scan mode for better device ID.
 - **Local IP Identification**: Labels your current machine as `(YOU)`.
 - **Deep Scan Mode**: Identifies open ports and services (like HTTP, SSH, AirPlay).
 - **Multi-Source Discovery**: Combines `nmap`, `avahi-browse` (mDNS), and ARP cache.
 - **Service Integration**: Displays mDNS service names (e.g., `_googlecast`, `_ipp`) directly in the info column.
-- **Enhanced Table Layout**: A clean, aligned table with prioritized hostnames and status indicators.
+- **Enhanced Table Layout**: A clean, aligned table with prioritized hostnames, labels, and status indicators.
 - **Auto-detects Network**: Finds your local subnet automatically.
 
 **Requirements:**

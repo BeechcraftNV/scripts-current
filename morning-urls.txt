@@ -7,6 +7,7 @@ https://mail.google.com/mail/u/0/#inbox
 https://mail.proton.me/u/0/inbox
 
 http://lmdeserver:3000
+https://miniflux.lab/unread
 
 pihole.lan/admin
 nzbhydra2.lan/

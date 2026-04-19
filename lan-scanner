@@ -85,6 +85,18 @@ ARP_OUTPUT=$(mktemp)
 FINAL_DATA=$(mktemp)
 trap 'rm -f $NMAP_OUTPUT $MDNS_OUTPUT $ARP_OUTPUT $FINAL_DATA' EXIT
 
+# Load Custom Labels
+LABELS_FILE="$HOME/.config/lan-scanner/labels.conf"
+declare -A CUSTOM_LABELS
+if [ -f "$LABELS_FILE" ]; then
+    while IFS='=' read -r mac label || [[ -n "$mac" ]]; do
+        [[ "$mac" =~ ^#.* ]] || [ -z "$mac" ] && continue
+        # Normalize MAC: uppercase and remove colons for robust matching
+        clean_mac=$(echo "$mac" | tr -d ':-' | tr '[:lower:]' '[:upper:]' | xargs)
+        CUSTOM_LABELS["$clean_mac"]="$label"
+    done < "$LABELS_FILE"
+fi
+
 # 1. ARP Cache
 echo -ne "${YELLOW}[1/3] Reading ARP cache...${NC}\r"
 ip neigh show | grep -v FAILED | awk '{print $1"|"$5}' > "$ARP_OUTPUT"
@@ -113,9 +125,9 @@ echo -e "${GREEN}[2/3] mDNS scan complete.         ${NC}"
 
 # 3. Nmap
 if [ "$DEEP_SCAN" = true ]; then
-    echo -ne "${YELLOW}[3/3] Running Nmap port scan...${NC}\r"
-    # -F for top 100 ports, -T4 for speed
-    nmap -T4 -F --min-rate 1000 "$NETWORK.0/24" 2>/dev/null > "$NMAP_OUTPUT"
+    echo -ne "${YELLOW}[3/3] Running Nmap deep scan (Title/Ports)...${NC}\r"
+    # -F for top 100 ports, --script http-title for identification
+    nmap -T4 -F --script http-title --min-rate 1000 "$NETWORK.0/24" 2>/dev/null > "$NMAP_OUTPUT"
 else
     echo -ne "${YELLOW}[3/3] Running fast discovery scan...${NC}\r"
     # -sn for ping scan, -PR for ARP ping (best for LAN)
@@ -155,10 +167,16 @@ BEGIN { FS=" "; OFS="|" }
         ports[ip] = (ports[ip] == "" ? p : ports[ip] "," p)
     }
 }
+/|_ http-title:/ {
+    t = $0; sub(/.*|_ http-title: /, "", t)
+    # Remove leading/trailing whitespace
+    gsub(/^[ \t]+|[ \t]+$/, "", t)
+    if (t != "") titles[ip] = (titles[ip] == "" ? t : titles[ip] " | " t)
+}
 END {
     for (i=1; i<=count; i++) {
         addr = ip_list[i]
-        print addr, ips[addr], mac[addr], vendor[addr], status[addr], ports[addr]
+        print addr, ips[addr], mac[addr], vendor[addr], status[addr], ports[addr], titles[addr]
     }
 }
 ' "$NMAP_OUTPUT" > "$FINAL_DATA"
@@ -168,7 +186,7 @@ declare -A seen_ips
 declare -A mdns_host
 declare -A mdns_svc
 
-while IFS='|' read -r ip hostname mac vendor status ports; do
+while IFS='|' read -r ip hostname mac vendor status ports titles; do
     seen_ips["$ip"]=1
 done < "$FINAL_DATA"
 
@@ -176,7 +194,7 @@ while IFS='|' read -r ip host svc; do
     mdns_host["$ip"]="$host"
     mdns_svc["$ip"]="$svc"
     if [ "${seen_ips[$ip]:-0}" -eq 0 ]; then
-        echo "$ip|$host|||CACHED|" >> "$FINAL_DATA"
+        echo "$ip|$host|||CACHED||" >> "$FINAL_DATA"
         seen_ips["$ip"]=1
     fi
 done < "$MDNS_OUTPUT"
@@ -189,25 +207,32 @@ while IFS='|' read -r ip mac; do
         if [ -n "$oui" ]; then
             vendor=$(grep "^$oui" /usr/share/nmap/nmap-mac-prefixes 2>/dev/null | cut -f2 || echo "")
         fi
-        echo "$ip||$mac|$vendor|CACHED|" >> "$FINAL_DATA"
+        echo "$ip||$mac|$vendor|CACHED||" >> "$FINAL_DATA"
         seen_ips["$ip"]=1
     fi
 done < "$ARP_OUTPUT"
 
 # Output Header
-echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
-printf "${WHITE}%-18s %-22s %-10s %-18s %s${NC}\n" "IP Address" "Hostname" "Status" "MAC Address" "Vendor / Services"
-echo -e "${BLUE}───────────────────────────────────────────────────────────────${NC}"
+echo -e "${BLUE}══════════════════════════════════════════════════════════════════════════════════════${NC}"
+printf "${WHITE}%-18s %-20s %-15s %-10s %-18s %s${NC}\n" "IP Address" "Hostname" "Label" "Status" "MAC Address" "Vendor / Services"
+echo -e "${BLUE}──────────────────────────────────────────────────────────────────────────────────────${NC}"
 
 # Process results and sort
 (
-while IFS='|' read -r ip hostname mac vendor status ports; do
+while IFS='|' read -r ip hostname mac vendor status ports titles; do
     [ -z "$ip" ] && continue
     
     # Identify local machine
     suffix=""
     if [ "$ip" = "$LOCAL_IP" ]; then
         suffix=" (YOU)"
+    fi
+    
+    # Custom Label lookup
+    label="---"
+    if [ -n "$mac" ]; then
+        clean_mac=$(echo "$mac" | tr -d ':-' | tr '[:lower:]' '[:upper:]')
+        label="${CUSTOM_LABELS[$clean_mac]:----}"
     fi
     
     # Status icon and label
@@ -221,9 +246,9 @@ while IFS='|' read -r ip hostname mac vendor status ports; do
     final_host="${mdns_host[$ip]:-$hostname}"
     [ -z "$final_host" ] && final_host="---"
     # Truncate hostname if too long
-    if [ ${#final_host} -gt 21 ]; then final_host="${final_host:0:18}..."; fi
+    if [ ${#final_host} -gt 19 ]; then final_host="${final_host:0:16}..."; fi
     
-    # Combine Vendor, mDNS services, and Nmap ports
+    # Combine Vendor, mDNS services, Nmap ports, and Titles
     info=""
     [ -n "$vendor" ] && info="$vendor"
     
@@ -233,6 +258,11 @@ while IFS='|' read -r ip hostname mac vendor status ports; do
         if [ -n "$info" ]; then info="$info ($svc)"; else info="($svc)"; fi
     fi
     
+    # Add titles (HTTP)
+    if [ -n "$titles" ]; then
+        if [ -n "$info" ]; then info="$info \"$titles\""; else info="\"$titles\""; fi
+    fi
+
     # Add ports (Nmap)
     if [ -n "$ports" ]; then
         if [ -n "$info" ]; then info="$info [ports:$ports]"; else info="[ports:$ports]"; fi
@@ -240,17 +270,18 @@ while IFS='|' read -r ip hostname mac vendor status ports; do
     [ -z "$info" ] && info="---"
     
     # Prepare row for sorting
-    # We use a custom format for sorting and then strip it
     # sortable_ip | colored_row
     
-    row=$(printf "${CYAN}%-18s${NC} ${YELLOW}%-22s${NC} %b    ${BLUE}%-18s${NC} %s" \
-        "$ip$suffix" "$final_host" "$s_icon" "${mac:- ---}" "$info")
+    row=$(printf "${CYAN}%-18s${NC} ${YELLOW}%-20s${NC} ${MAGENTA}%-15s${NC} %b    ${BLUE}%-18s${NC} %s" \
+        "$ip$suffix" "$final_host" "$label" "$s_icon" "${mac:- ---}" "$info")
     
     echo "$ip|$row"
 done < "$FINAL_DATA"
 ) | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | cut -d'|' -f2-
 
-echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BLUE}══════════════════════════════════════════════════════════════════════════════════════${NC}"
 echo -e "${GRAY}Total: $(wc -l < "$FINAL_DATA") devices found.${NC}"
-echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached  (Use -d for port scan)${NC}"
+echo -e "${GRAY}Legend: ${GREEN}●${GRAY} Active  ${GRAY}○${GRAY} Cached  (Use -d for port scan and HTTP titles)${NC}"
+echo -e "${GRAY}Labels: Edit $LABELS_FILE (Format: MAC=Friendly Name)${NC}"
 echo ""
+

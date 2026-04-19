@@ -58,6 +58,7 @@ This report documents the active scripts and utilities in the local binary direc
 
 ## Audit History
 
+- **2026-04-19**: Enhanced `lan-scanner` with custom label support (`~/.config/lan-scanner/labels.conf`) and HTTP title detection in deep scan mode.
 - **2026-04-01**: Migrated scripts directory from `~/.local/bin` to `~/bin`, synced with GitHub repo; added backup-media-settings, check-system-errors-glam, fresh, fresh-editor, rquote, yt-dlp; removed build-welcome-site
 - **2026-01-23**: Cleaned up duplicate shebangs in 4 scripts, improved morning-tabs error handling
 - **Previous**: Removed obsolete one-off migration/setup scripts (media_ext4_migration, setup-mergerfs-pool, etc.)
