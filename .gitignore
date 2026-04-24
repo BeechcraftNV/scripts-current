@@ -13,7 +13,11 @@ subliminal
 
 # Symlinks to installed applications
 claude
+fresh
 zed
+
+# Downloaded tools (managed separately)
+yt-dlp
 
 # Claude Code settings directory
 .claude/

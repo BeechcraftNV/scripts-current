@@ -9,6 +9,7 @@
 #   (no arguments)  : Update all stacks in /opt/docker/compose/
 
 set -euo pipefail
+shopt -s extglob
 
 # Parse command line arguments
 DRY_RUN=false
@@ -99,7 +100,7 @@ if [ ${#SELECTED_STACKS[@]} -gt 0 ]; then
     COMPOSE_FILES=("${SELECTED_STACKS[@]}")
     echo -e "${YELLOW}Processing selected stacks only${NC}" | tee -a "$LOG_FILE"
 else
-    COMPOSE_FILES=(*.yml)
+    COMPOSE_FILES=(!(docker-compose).yml)
 fi
 
 if [ ${#COMPOSE_FILES[@]} -eq 0 ] || [ ! -f "${COMPOSE_FILES[0]}" ]; then

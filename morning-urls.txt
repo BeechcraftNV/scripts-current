@@ -9,6 +9,7 @@ https://mail.proton.me/u/0/inbox
 http://lmdeserver:3000
 https://miniflux.lab/unread
 
+seerr.lan/
 pihole.lan/admin
 nzbhydra2.lan/
 radarr.lan/
