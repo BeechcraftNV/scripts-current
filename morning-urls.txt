@@ -6,10 +6,6 @@ https://calendar.google.com
 https://mail.google.com/mail/u/0/#inbox
 https://mail.proton.me/u/0/inbox
 
-# http://homepage.lan
-
-# file:///run/user/1000/gvfs/smb-share:server=lmdeserver.local,share=pool/review/nfl_bets.txt
-
 http://seerr.lan/
 http://pihole.lan/admin
 http://nzbhydra2.lan/
