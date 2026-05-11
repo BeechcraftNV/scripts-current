@@ -1,0 +1,27 @@
+[Unit]
+Description=Audio Normalization Monitor and Worker
+Documentation=file:/var/lib/audio-norm/
+After=network.target mnt-pool.mount
+Requires=mnt-pool.mount
+
+[Service]
+Type=forking
+User=steven
+Group=steven
+
+ExecStart=/bin/bash -c '\
+    python3 /home/steven/bin/audio_monitor.py &\
+    echo $! > /var/lib/audio-norm/monitor.pid;\
+    python3 /home/steven/bin/audio_worker.py &\
+    echo $! > /var/lib/audio-norm/worker.pid'
+
+ExecStop=/bin/bash -c '\
+    kill $(cat /var/lib/audio-norm/monitor.pid) 2>/dev/null;\
+    kill $(cat /var/lib/audio-norm/worker.pid) 2>/dev/null'
+
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
