@@ -1,36 +1,39 @@
 #!/usr/bin/env python3
 """
 audio_worker.py - Processes files from the normalize queue one at a time.
-Uses LUFS measurement to determine if normalization is needed regardless of codec.
+Uses LUFS measurement to gate transcoding regardless of codec.
 
-Queue file: /var/lib/audio-norm/queue.txt
-Log: /var/lib/audio-norm/worker.log
-Completed: /var/lib/audio-norm/completed.txt
-Failed: /var/lib/audio-norm/failed.txt
+Queue file:    /var/lib/audio-norm/queue.txt
+Completed:     /var/lib/audio-norm/completed.txt  (format: "<unix_ts> <path>")
+Failed:        /var/lib/audio-norm/failed.txt
+Log:           /var/lib/audio-norm/worker.log
+Processing lock: /var/lib/audio-norm/processing.lock (shared with normalize_audio.py)
 """
 
-import subprocess
+import fcntl
 import logging
-import sys
-import shutil
-import json
-import time
-import re
 import os
+import signal
+import sys
+import time
 from pathlib import Path
 
+import audio_common
+from audio_common import (
+    acquire_lock,
+    get_audio_info,
+    needs_normalization,
+    release_lock,
+    transcode_to_aac,
+)
+
 # --- Config ---
-QUEUE_FILE      = Path("/var/lib/audio-norm/queue.txt")
-COMPLETED_FILE  = Path("/var/lib/audio-norm/completed.txt")
-FAILED_FILE     = Path("/var/lib/audio-norm/failed.txt")
-LOG_FILE        = Path("/var/lib/audio-norm/worker.log")
-LOCK_FILE       = Path("/var/lib/audio-norm/processing.lock")
-AUDIO_BITRATE   = "192k"
-LOUDNORM        = "loudnorm=I=-16:TP=-1.5:LRA=11"
-LUFS_TARGET     = -16.0
-LUFS_THRESHOLD  = 2.0   # skip if within 2 LUFS of target
-POLL_INTERVAL   = 10    # seconds between queue checks when idle
-MIN_FREE_GB     = 5     # minimum free space before processing
+QUEUE_FILE     = Path("/var/lib/audio-norm/queue.txt")
+COMPLETED_FILE = Path("/var/lib/audio-norm/completed.txt")
+FAILED_FILE    = Path("/var/lib/audio-norm/failed.txt")
+LOG_FILE       = Path("/var/lib/audio-norm/worker.log")
+QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
+POLL_INTERVAL  = 10
 
 # --- Logging ---
 logging.basicConfig(
@@ -38,243 +41,30 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [worker] %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+        logging.StreamHandler(),
+    ],
 )
 log = logging.getLogger(__name__)
+audio_common.log = log
 
 
-def acquire_lock() -> bool:
-    """Acquire processing lock. Returns False if already locked."""
-    if LOCK_FILE.exists():
-        pid = LOCK_FILE.read_text().strip()
-        log.warning(f"Lock held by pid {pid}, skipping")
-        return False
-    LOCK_FILE.write_text(str(os.getpid()))
-    return True
+# --- Queue I/O (fcntl-locked) ---
+
+class _QueueLock:
+    """flock guard around queue.txt mutations."""
+
+    def __enter__(self):
+        QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(QUEUE_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self._fd, fcntl.LOCK_UN)
+        os.close(self._fd)
 
 
-def release_lock() -> None:
-    """Release processing lock."""
-    LOCK_FILE.unlink(missing_ok=True)
-
-
-def measure_lufs(filepath: Path) -> float | None:
-    """
-    Measure integrated loudness of file using loudnorm analysis pass.
-    Returns LUFS value or None on failure.
-    """
-    cmd = [
-        "ffmpeg", "-i", str(filepath),
-        "-af", f"{LOUDNORM}:print_format=json",
-        "-f", "null", "-",
-    ]
-    try:
-        log.info(f"Measuring LUFS: {filepath.name}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=900  # 15 min max for analysis
-        )
-
-        stderr = result.stderr
-        match = re.search(r'\{[^{}]*"input_i"\s*:[^{}]*\}', stderr, re.DOTALL)
-        if not match:
-            log.warning(f"Could not parse loudnorm output for: {filepath.name}")
-            return None
-
-        data = json.loads(match.group())
-        lufs = float(data.get("input_i", "nan"))
-
-        if lufs == float("nan") or lufs < -100:
-            log.warning(f"Invalid LUFS measurement for: {filepath.name}")
-            return None
-
-        log.info(f"Measured {lufs:.1f} LUFS: {filepath.name}")
-        return lufs
-
-    except subprocess.TimeoutExpired:
-        log.error(f"LUFS measurement timed out: {filepath.name}")
-        return None
-    except Exception as e:
-        log.error(f"LUFS measurement failed: {filepath.name}: {e}")
-        return None
-
-
-def needs_normalization(filepath: Path) -> bool:
-    """
-    Determine if file needs normalization based on LUFS measurement.
-    Returns True if normalization needed, False if already within threshold.
-    """
-    lufs = measure_lufs(filepath)
-
-    if lufs is None:
-        log.warning(f"Could not measure LUFS, will normalize: {filepath.name}")
-        return True
-
-    diff = abs(lufs - LUFS_TARGET)
-    if diff <= LUFS_THRESHOLD:
-        log.info(f"Already normalized ({lufs:.1f} LUFS, within {LUFS_THRESHOLD} of target), skipping: {filepath.name}")
-        return False
-
-    log.info(f"Needs normalization ({lufs:.1f} LUFS, {diff:.1f} from target): {filepath.name}")
-    return True
-
-
-def get_audio_info(filepath: Path) -> dict | None:
-    """Return first audio stream info, or None on failure."""
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_streams",
-        str(filepath)
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        data = json.loads(result.stdout)
-        for stream in data.get("streams", []):
-            if stream.get("codec_type") == "audio":
-                return stream
-    except Exception as e:
-        log.error(f"ffprobe failed on {filepath}: {e}")
-    return None
-
-
-def verify_output(filepath: Path) -> bool:
-    """Verify output file has valid video and AAC audio streams."""
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_streams",
-        str(filepath)
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        data = json.loads(result.stdout)
-        streams = data.get("streams", [])
-
-        has_video = any(s.get("codec_type") == "video" for s in streams)
-        has_aac   = any(
-            s.get("codec_type") == "audio" and s.get("codec_name") == "aac"
-            for s in streams
-        )
-
-        if not has_video:
-            log.error(f"Output missing video stream: {filepath.name}")
-            return False
-        if not has_aac:
-            log.error(f"Output audio is not AAC: {filepath.name}")
-            return False
-
-        return True
-
-    except Exception as e:
-        log.error(f"Verification failed: {filepath.name}: {e}")
-        return False
-
-
-def check_free_space(filepath: Path) -> bool:
-    """Check there is enough free space on the target filesystem."""
-    try:
-        stat = shutil.disk_usage(filepath.parent)
-        free_gb = stat.free / (1024 ** 3)
-        if free_gb < MIN_FREE_GB:
-            log.error(f"Low disk space: {free_gb:.1f}GB free, need {MIN_FREE_GB}GB")
-            return False
-        return True
-    except Exception as e:
-        log.error(f"Could not check disk space: {e}")
-        return False
-
-
-def transcode(filepath: Path) -> bool:
-    """
-    Transcode audio to AAC with loudnorm.
-    Replaces original on success.
-    Returns True on success, False on failure.
-    """
-    if not filepath.exists():
-        log.error(f"File no longer exists: {filepath}")
-        return False
-
-    if not check_free_space(filepath):
-        return False
-
-    info = get_audio_info(filepath)
-    if info is None:
-        log.error(f"Could not read audio info: {filepath.name}")
-        return False
-
-    codec    = info.get("codec_name", "unknown")
-    channels = info.get("channels", "?")
-
-    if not acquire_lock():
-        return False
-
-    try:
-        # LUFS check — skip if already normalized regardless of codec
-        if not needs_normalization(filepath):
-            return True
-
-        tmp = filepath.with_suffix(".tmp.mkv")
-
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(filepath),
-            "-map", "0",
-            "-c:v", "copy",
-            "-c:s", "copy",
-            "-c:a", "aac",
-            "-b:a", AUDIO_BITRATE,
-            "-strict", "-2",
-            "-af", LOUDNORM,
-            str(tmp)
-        ]
-
-        log.info(f"Transcoding ({codec} ch:{channels}): {filepath.name}")
-        log.info(f"Command: {' '.join(cmd)}")
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=3600
-        )
-
-        if result.returncode != 0:
-            log.error(f"FFmpeg failed (code {result.returncode}): {filepath.name}")
-            log.error(result.stderr[-2000:])
-            tmp.unlink(missing_ok=True)
-            return False
-
-        if not tmp.exists() or tmp.stat().st_size < 1024 * 1024:
-            log.error(f"Output missing or too small: {tmp}")
-            tmp.unlink(missing_ok=True)
-            return False
-
-        if not verify_output(tmp):
-            tmp.unlink(missing_ok=True)
-            return False
-
-        shutil.move(str(tmp), str(filepath))
-        log.info(f"SUCCESS: {filepath.name}")
-        return True
-
-    except subprocess.TimeoutExpired:
-        log.error(f"Timeout: {filepath.name}")
-        filepath.with_suffix(".tmp.mkv").unlink(missing_ok=True)
-        return False
-    except Exception as e:
-        log.error(f"Unexpected error: {filepath.name}: {e}")
-        filepath.with_suffix(".tmp.mkv").unlink(missing_ok=True)
-        return False
-    finally:
-        release_lock()
-
-
-def read_queue() -> list[str]:
-    """Read current queue entries."""
+def _read_queue() -> list[str]:
     if not QUEUE_FILE.exists():
         return []
     return [
@@ -284,54 +74,111 @@ def read_queue() -> list[str]:
     ]
 
 
-def remove_from_queue(filepath: str) -> None:
-    """Remove a specific entry from the queue."""
-    entries = read_queue()
-    remaining = [e for e in entries if e != filepath]
-    QUEUE_FILE.write_text("\n".join(remaining) + "\n" if remaining else "")
+def _write_queue(entries: list[str]) -> None:
+    """Atomic rewrite via tempfile + os.replace."""
+    tmp = QUEUE_FILE.with_suffix(QUEUE_FILE.suffix + ".tmp")
+    body = ("\n".join(entries) + "\n") if entries else ""
+    tmp.write_text(body)
+    os.replace(tmp, QUEUE_FILE)
 
 
-def log_completed(filepath: str) -> None:
-    """Append to completed log."""
+def peek_queue() -> str | None:
+    """Read the first entry without removing it."""
+    with _QueueLock():
+        entries = _read_queue()
+        return entries[0] if entries else None
+
+
+def remove_from_queue(filepath_str: str) -> None:
+    with _QueueLock():
+        entries = _read_queue()
+        remaining = [e for e in entries if e != filepath_str]
+        _write_queue(remaining)
+
+
+def log_completed(filepath_str: str) -> None:
+    """Append "<unix_ts> <path>" so the monitor can suppress the rename event."""
     COMPLETED_FILE.touch(exist_ok=True)
     with COMPLETED_FILE.open("a") as f:
-        f.write(filepath + "\n")
+        f.write(f"{int(time.time())} {filepath_str}\n")
 
 
-def log_failed(filepath: str) -> None:
-    """Append to failed log."""
+def log_failed(filepath_str: str) -> None:
     FAILED_FILE.touch(exist_ok=True)
     with FAILED_FILE.open("a") as f:
-        f.write(filepath + "\n")
+        f.write(filepath_str + "\n")
+
+
+# --- Per-file processing ---
+
+def handle_one(filepath_str: str) -> None:
+    """Process the head-of-queue file. Must be called only while holding the lock."""
+    filepath = Path(filepath_str)
+    log.info(f"Dequeued: {filepath.name}")
+
+    if not filepath.exists():
+        log.error(f"File no longer exists: {filepath}")
+        remove_from_queue(filepath_str)
+        log_failed(filepath_str)
+        return
+
+    info = get_audio_info(filepath)
+    if info is None:
+        log.error(f"Could not read audio info: {filepath.name}")
+        remove_from_queue(filepath_str)
+        log_failed(filepath_str)
+        return
+
+    codec    = info.get("codec_name", "unknown")
+    channels = info.get("channels", "?")
+
+    if not needs_normalization(filepath):
+        # Already within LUFS window — treat as success.
+        remove_from_queue(filepath_str)
+        log_completed(filepath_str)
+        return
+
+    log.info(f"Transcoding ({codec} ch:{channels}): {filepath.name}")
+    success = transcode_to_aac(filepath)
+
+    remove_from_queue(filepath_str)
+    if success:
+        log_completed(filepath_str)
+    else:
+        log_failed(filepath_str)
+        log.error(f"Failed, moved to failed log: {filepath.name}")
 
 
 def process_queue() -> None:
-    """Main worker loop — poll queue and process files."""
-    log.info(f"Worker started. Target: {LUFS_TARGET} LUFS, threshold: ±{LUFS_THRESHOLD} LUFS")
+    """Main loop. Lock contention retries without dequeuing or failing the file."""
+    log.info("Worker started.")
 
     while True:
-        queue = read_queue()
-
-        if not queue:
+        head = peek_queue()
+        if head is None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        filepath_str = queue[0]
-        filepath = Path(filepath_str)
+        # Try to take the processing lock without blocking. If another process
+        # (e.g. a manual normalize_audio.py run) holds it, wait and retry —
+        # do NOT remove the entry or write to failed.txt.
+        if not acquire_lock(blocking=False):
+            log.info(f"Processing lock busy, retrying in {POLL_INTERVAL}s")
+            time.sleep(POLL_INTERVAL)
+            continue
 
-        log.info(f"Dequeued: {filepath.name}")
-
-        success = transcode(filepath)
-
-        if success:
-            remove_from_queue(filepath_str)
-            log_completed(filepath_str)
-        else:
-            remove_from_queue(filepath_str)
-            log_failed(filepath_str)
-            log.error(f"Failed, moved to failed log: {filepath.name}")
+        try:
+            handle_one(head)
+        finally:
+            release_lock()
 
         time.sleep(2)
+
+
+def _graceful_shutdown(signum, _frame):
+    log.info(f"Received signal {signum}, releasing lock and exiting")
+    release_lock()
+    sys.exit(0)
 
 
 if __name__ == "__main__":
@@ -339,14 +186,14 @@ if __name__ == "__main__":
         f.parent.mkdir(parents=True, exist_ok=True)
         f.touch(exist_ok=True)
 
-    # Clean up stale lock on startup
-    if LOCK_FILE.exists():
+    if audio_common.LOCK_FILE.exists():
         log.warning("Stale lock found on startup, removing")
         release_lock()
+
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
 
     try:
         process_queue()
     except KeyboardInterrupt:
-        log.info("Worker stopped by user")
-        release_lock()
-        sys.exit(0)
+        _graceful_shutdown(signal.SIGINT, None)
