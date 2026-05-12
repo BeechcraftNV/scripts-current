@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 normalize_audio.py - Bulk audio loudness normalization for a media library.
-Walks a directory, gates each file on LUFS measurement (and AAC codec by
-default), transcodes the rest to AAC + loudnorm, replacing the original.
+Walks a directory, skips files already AAC (codec gate), transcodes the
+rest to AAC + loudnorm, replacing the original. Writes each completion to
+/var/lib/audio-norm/completed.txt so the systemd monitor suppresses the
+rename-into-place event for the next 300s and the worker doesn't waste
+LUFS-measurement time on files we just processed.
 
 Coordinates with the systemd worker via the shared lock in
 /var/lib/audio-norm/processing.lock.
@@ -16,7 +19,7 @@ Usage:
 
 Flags:
     --dry-run     report what would happen, do not write
-    --force       bypass both the AAC-codec skip and the LUFS skip
+    --force       bypass the AAC-codec skip (re-encode AAC sources too)
     --dynaudnorm  prepend dynaudnorm to the loudnorm filter chain
 """
 
@@ -30,7 +33,7 @@ from audio_common import (
     acquire_lock,
     check_free_space,
     get_audio_info,
-    needs_normalization,
+    log_completed,
     release_lock,
     transcode_to_aac,
 )
@@ -113,11 +116,6 @@ def main():
                 skipped += 1
                 continue
 
-            # LUFS gate (bypassed by --force)
-            if not FORCE and not needs_normalization(filepath):
-                skipped += 1
-                continue
-
             if DRY_RUN:
                 log.info(f"WOULD PROCESS ({codec} ch:{channels}): {filepath.name}")
                 would_process += 1
@@ -131,6 +129,9 @@ def main():
             log.info(f"Processing ({codec} ch:{channels}): {filepath.name}")
             if transcode_to_aac(filepath, audio_filter=audio_filter):
                 success += 1
+                # Suppress the worker's re-measurement after the rename-into-place
+                # moved_to event fires — the monitor's 300s suppression catches it.
+                log_completed(str(filepath))
             else:
                 failed += 1
 

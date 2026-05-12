@@ -22,6 +22,7 @@ import audio_common
 from audio_common import (
     acquire_lock,
     get_audio_info,
+    log_completed,
     needs_normalization,
     release_lock,
     transcode_to_aac,
@@ -29,11 +30,11 @@ from audio_common import (
 
 # --- Config ---
 QUEUE_FILE     = Path("/var/lib/audio-norm/queue.txt")
-COMPLETED_FILE = Path("/var/lib/audio-norm/completed.txt")
 FAILED_FILE    = Path("/var/lib/audio-norm/failed.txt")
 LOG_FILE       = Path("/var/lib/audio-norm/worker.log")
 QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
 POLL_INTERVAL  = 10
+COMPLETED_FILE = audio_common.COMPLETED_FILE  # for startup mkdir/touch only
 
 # --- Logging ---
 logging.basicConfig(
@@ -94,13 +95,6 @@ def remove_from_queue(filepath_str: str) -> None:
         entries = _read_queue()
         remaining = [e for e in entries if e != filepath_str]
         _write_queue(remaining)
-
-
-def log_completed(filepath_str: str) -> None:
-    """Append "<unix_ts> <path>" so the monitor can suppress the rename event."""
-    COMPLETED_FILE.touch(exist_ok=True)
-    with COMPLETED_FILE.open("a") as f:
-        f.write(f"{int(time.time())} {filepath_str}\n")
 
 
 def log_failed(filepath_str: str) -> None:

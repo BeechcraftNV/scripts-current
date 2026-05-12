@@ -28,6 +28,7 @@ LUFS_TARGET    = -16.0
 LUFS_THRESHOLD = 2.0
 MIN_FREE_GB    = 5
 LOCK_FILE      = Path("/var/lib/audio-norm/processing.lock")
+COMPLETED_FILE = Path("/var/lib/audio-norm/completed.txt")
 LOCK_WAIT      = 60
 LOCK_TIMEOUT   = 7200
 
@@ -70,6 +71,14 @@ def acquire_lock(blocking: bool = True) -> bool:
 def release_lock() -> None:
     LOCK_FILE.unlink(missing_ok=True)
     log.info("Lock released")
+
+
+def log_completed(filepath_str: str) -> None:
+    """Append "<unix_ts> <path>" so the monitor can suppress the rename event."""
+    COMPLETED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COMPLETED_FILE.touch(exist_ok=True)
+    with COMPLETED_FILE.open("a") as f:
+        f.write(f"{int(time.time())} {filepath_str}\n")
 
 
 # --- ffprobe ---
