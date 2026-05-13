@@ -46,7 +46,7 @@ args = [a for a in sys.argv[1:] if not a.startswith("--")]
 TARGET_DIR = args[0] if args else "/mnt/pool/tv"
 
 # --- Config ---
-LOG_FILE    = "/tmp/normalize_audio.log"
+LOG_FILE    = "/var/lib/audio-norm/normalize_audio.log"
 SKIP_CODECS = {"aac"} if not FORCE else set()
 EXTENSIONS  = {".mkv", ".mp4", ".avi"}
 
