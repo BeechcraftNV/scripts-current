@@ -1,0 +1,10 @@
+#!/bin/zsh
+   # 1. Force the GPU to re-probe all physical display connectors
+   sudo udevadm trigger --action=change --sysname-match="card[0-9]*"
+
+   # 2. Kill the top bar and applets (they will auto-respawn instantly)
+   pkill cosmic-panel
+   pkill cosmic-applet
+
+   # 3. Kick the tweak daemon to fix window/mouse coordinate tracking
+   pkill cosmic-tweak-daemon
