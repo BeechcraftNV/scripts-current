@@ -243,8 +243,6 @@ chmod +x ~/bin/check-systemd-errors
 ├── morning-urls.txt                  # URL list for morning-tabs
 ├── ncdu_cleanup_cycle                # Interactive disk usage cleanup
 ├── plex_analyzer.py                  # Analyzes media for Plex direct play
-├── plex-preopt                       # Primary video optimization pipeline
-├── plex-preopt-single-test           # Test encoder for single file verification
 ├── rquote                            # Random quote utility
 ├── sort_raindrops                    # Raindrop.io bookmark sorter
 ├── sync-scripts                      # Repository sync helper

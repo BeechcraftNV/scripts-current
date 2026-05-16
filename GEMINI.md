@@ -29,16 +29,6 @@ A diagnostic tool to quickly review systemd logs:
 
 Scripts focused on preparing and optimizing media for direct play on Plex.
 
-#### [plex-preopt](./plex-preopt)
-The main pipeline for optimizing video files.
-- **Features:** Uses Intel VAAPI (`/dev/dri/renderD128`) for hardware transcoding. Falls back to CPU (`libx264`) if unavailable.
-- **Strategy:** Smart remuxing (if codecs match) vs. transcoding. Mirrors source directory structure to `/mnt/pool/optimized`.
-- **Idempotency:** Checks modification times (`mtime`) to skip already processed files.
-
-#### [plex-preopt-single-test](./plex-preopt-single-test)
-A testing tool to verify encoding settings on a single file before batch processing.
-- **Usage:** `plex-preopt-single-test /path/to/file.mkv`
-
 #### [plex_analyzer.py](./plex_analyzer.py)
 A Python script to scan directories and identify files that may not Direct Play on Plex based on codecs and containers.
 

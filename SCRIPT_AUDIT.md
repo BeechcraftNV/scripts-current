@@ -32,8 +32,6 @@ This report documents the active scripts and utilities in the local binary direc
 
 | File | Purpose |
 |---|---|
-| `plex-preopt` | Primary video optimization pipeline (VAAPI/CPU) |
-| `plex-preopt-single-test` | Test encoder for single file verification |
 | `convert-audiobook` | MP3 to M4B audiobook converter via Docker |
 | `plex_analyzer.py` | Analyzes media files for Plex direct play compatibility |
 
