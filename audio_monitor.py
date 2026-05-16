@@ -33,6 +33,7 @@ QUEUE_FILE     = Path("/var/lib/audio-norm/queue.txt")
 QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
 COMPLETED_FILE = Path("/var/lib/audio-norm/completed.txt")
 LOG_FILE       = Path("/var/lib/audio-norm/monitor.log")
+PID_FILE       = Path("/var/lib/audio-norm/monitor.pid")
 EXTENSIONS     = {".mkv", ".mp4", ".avi"}
 
 # How long after the worker logs a completion we suppress moved_to events
@@ -190,6 +191,7 @@ def _graceful_shutdown(signum, _frame):
     log.info(f"Received signal {signum}, shutting down")
     if _proc is not None:
         _proc.terminate()
+    PID_FILE.unlink(missing_ok=True)
     sys.exit(0)
 
 
@@ -198,6 +200,9 @@ if __name__ == "__main__":
         if not Path(d).exists():
             log.error(f"Watch directory not found: {d}")
             sys.exit(1)
+
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()))
 
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)

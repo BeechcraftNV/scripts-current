@@ -33,6 +33,7 @@ QUEUE_FILE     = Path("/var/lib/audio-norm/queue.txt")
 FAILED_FILE    = Path("/var/lib/audio-norm/failed.txt")
 LOG_FILE       = Path("/var/lib/audio-norm/worker.log")
 QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
+PID_FILE       = Path("/var/lib/audio-norm/worker.pid")
 POLL_INTERVAL  = 10
 COMPLETED_FILE = audio_common.COMPLETED_FILE  # for startup mkdir/touch only
 
@@ -202,6 +203,7 @@ def process_queue() -> None:
 def _graceful_shutdown(signum, _frame):
     log.info(f"Received signal {signum}, releasing lock and exiting")
     release_lock()
+    PID_FILE.unlink(missing_ok=True)
     sys.exit(0)
 
 
@@ -209,6 +211,8 @@ if __name__ == "__main__":
     for f in [QUEUE_FILE, COMPLETED_FILE, FAILED_FILE, LOG_FILE]:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.touch(exist_ok=True)
+
+    PID_FILE.write_text(str(os.getpid()))
 
     if audio_common.LOCK_FILE.exists():
         log.warning("Stale lock found on startup, removing")
