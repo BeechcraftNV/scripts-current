@@ -4,10 +4,16 @@ audio_worker.py - Processes files from the normalize queue one at a time.
 Uses LUFS measurement to gate transcoding regardless of codec.
 
 Queue file:    /var/lib/audio-norm/queue.txt
+Backlog file:  /var/lib/audio-norm/backlog.txt   (low-priority bulk additions)
 Completed:     /var/lib/audio-norm/completed.txt  (format: "<unix_ts> <path>")
 Failed:        /var/lib/audio-norm/failed.txt
 Log:           /var/lib/audio-norm/worker.log
 Processing lock: /var/lib/audio-norm/processing.lock (shared with normalize_audio.py)
+
+Priority: queue.txt (new arrivals from audio_monitor.py) is drained first;
+backlog.txt is only consulted when queue.txt is empty, so a bulk backlog
+never delays normalization of newly added files. When backlog.txt is empty
+or absent the worker behaves exactly as a plain single-queue worker.
 """
 
 import fcntl
@@ -30,6 +36,7 @@ from audio_common import (
 
 # --- Config ---
 QUEUE_FILE     = Path("/var/lib/audio-norm/queue.txt")
+BACKLOG_FILE   = Path("/var/lib/audio-norm/backlog.txt")
 FAILED_FILE    = Path("/var/lib/audio-norm/failed.txt")
 LOG_FILE       = Path("/var/lib/audio-norm/worker.log")
 QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
@@ -53,7 +60,7 @@ audio_common.log = log
 # --- Queue I/O (fcntl-locked) ---
 
 class _QueueLock:
-    """flock guard around queue.txt mutations."""
+    """flock guard around queue.txt / backlog.txt mutations."""
 
     def __enter__(self):
         QUEUE_LOCK.parent.mkdir(parents=True, exist_ok=True)
@@ -66,36 +73,43 @@ class _QueueLock:
         os.close(self._fd)
 
 
-def _read_queue() -> list[str]:
-    if not QUEUE_FILE.exists():
+def _read_queue(path: Path) -> list[str]:
+    if not path.exists():
         return []
     return [
         line.strip()
-        for line in QUEUE_FILE.read_text().splitlines()
+        for line in path.read_text().splitlines()
         if line.strip()
     ]
 
 
-def _write_queue(entries: list[str]) -> None:
+def _write_queue(path: Path, entries: list[str]) -> None:
     """Atomic rewrite via tempfile + os.replace."""
-    tmp = QUEUE_FILE.with_suffix(QUEUE_FILE.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + ".tmp")
     body = ("\n".join(entries) + "\n") if entries else ""
     tmp.write_text(body)
-    os.replace(tmp, QUEUE_FILE)
+    os.replace(tmp, path)
 
 
-def peek_queue() -> str | None:
-    """Read the first entry without removing it."""
+def peek_next() -> tuple[str, Path] | None:
+    """Return (filepath, source_queue) for the next file to process.
+
+    queue.txt (new arrivals) has strict priority; backlog.txt is consulted
+    only when queue.txt is empty. Returns None when both queues are empty.
+    """
     with _QueueLock():
-        entries = _read_queue()
-        return entries[0] if entries else None
+        for source in (QUEUE_FILE, BACKLOG_FILE):
+            entries = _read_queue(source)
+            if entries:
+                return entries[0], source
+        return None
 
 
-def remove_from_queue(filepath_str: str) -> None:
+def remove_from_queue(source: Path, filepath_str: str) -> None:
     with _QueueLock():
-        entries = _read_queue()
+        entries = _read_queue(source)
         remaining = [e for e in entries if e != filepath_str]
-        _write_queue(remaining)
+        _write_queue(source, remaining)
 
 
 def log_failed(filepath_str: str) -> None:
@@ -125,21 +139,25 @@ def _layout_for_channels(channels) -> str | None:
 
 # --- Per-file processing ---
 
-def handle_one(filepath_str: str) -> None:
-    """Process the head-of-queue file. Must be called only while holding the lock."""
+def handle_one(filepath_str: str, source: Path) -> None:
+    """Process the head-of-queue file. Must be called only while holding the lock.
+
+    `source` is the queue file the entry came from (queue.txt or backlog.txt);
+    completion removes the entry from that same file.
+    """
     filepath = Path(filepath_str)
     log.info(f"Dequeued: {filepath.name}")
 
     if not filepath.exists():
         log.error(f"File no longer exists: {filepath}")
-        remove_from_queue(filepath_str)
+        remove_from_queue(source, filepath_str)
         log_failed(filepath_str)
         return
 
     info = get_audio_info(filepath)
     if info is None:
         log.error(f"Could not read audio info: {filepath.name}")
-        remove_from_queue(filepath_str)
+        remove_from_queue(source, filepath_str)
         log_failed(filepath_str)
         return
 
@@ -149,7 +167,7 @@ def handle_one(filepath_str: str) -> None:
 
     if not needs_normalization(filepath):
         # Already within LUFS window — treat as success.
-        remove_from_queue(filepath_str)
+        remove_from_queue(source, filepath_str)
         log_completed(filepath_str)
         return
 
@@ -166,7 +184,7 @@ def handle_one(filepath_str: str) -> None:
     log.info(f"Transcoding ({codec} ch:{channels}): {filepath.name}")
     success = transcode_to_aac(filepath, audio_filter=audio_filter)
 
-    remove_from_queue(filepath_str)
+    remove_from_queue(source, filepath_str)
     if success:
         log_completed(filepath_str)
     else:
@@ -179,10 +197,13 @@ def process_queue() -> None:
     log.info("Worker started.")
 
     while True:
-        head = peek_queue()
-        if head is None:
+        nxt = peek_next()
+        if nxt is None:
             time.sleep(POLL_INTERVAL)
             continue
+        head, source = nxt
+        if source is BACKLOG_FILE:
+            log.info(f"Queue empty, pulling from backlog: {Path(head).name}")
 
         # Try to take the processing lock without blocking. If another process
         # (e.g. a manual normalize_audio.py run) holds it, wait and retry —
@@ -193,7 +214,7 @@ def process_queue() -> None:
             continue
 
         try:
-            handle_one(head)
+            handle_one(head, source)
         finally:
             release_lock()
 
