@@ -103,6 +103,25 @@ def log_failed(filepath_str: str) -> None:
         f.write(filepath_str + "\n")
 
 
+# --- Channel layout ---
+
+# ffprobe reports channel_layout="unknown" for some sources (e.g. Bluray rips).
+# The native AAC encoder refuses to open without a known layout, so map the
+# channel count to a standard layout and force it via the filter chain.
+_CHANNEL_LAYOUTS = {
+    1: "mono", 2: "stereo", 3: "2.1", 4: "quad",
+    5: "5.0", 6: "5.1", 7: "6.1", 8: "7.1",
+}
+
+
+def _layout_for_channels(channels) -> str | None:
+    """Standard channel layout name for a channel count, or None if unknown."""
+    try:
+        return _CHANNEL_LAYOUTS.get(int(channels))
+    except (TypeError, ValueError):
+        return None
+
+
 # --- Per-file processing ---
 
 def handle_one(filepath_str: str) -> None:
@@ -125,6 +144,7 @@ def handle_one(filepath_str: str) -> None:
 
     codec    = info.get("codec_name", "unknown")
     channels = info.get("channels", "?")
+    layout   = info.get("channel_layout", "")
 
     if not needs_normalization(filepath):
         # Already within LUFS window — treat as success.
@@ -132,8 +152,18 @@ def handle_one(filepath_str: str) -> None:
         log_completed(filepath_str)
         return
 
+    # When the source layout is undefined, force one so the AAC encoder can open.
+    audio_filter = audio_common.LOUDNORM
+    if not layout or layout == "unknown":
+        forced = _layout_for_channels(channels)
+        if forced:
+            audio_filter = f"aformat=channel_layouts={forced},{audio_filter}"
+            log.info(f"Unknown channel layout, forcing {forced} ({channels}ch): {filepath.name}")
+        else:
+            log.warning(f"Unknown channel layout and unmappable count ({channels}ch): {filepath.name}")
+
     log.info(f"Transcoding ({codec} ch:{channels}): {filepath.name}")
-    success = transcode_to_aac(filepath)
+    success = transcode_to_aac(filepath, audio_filter=audio_filter)
 
     remove_from_queue(filepath_str)
     if success:
