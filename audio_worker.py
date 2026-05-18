@@ -42,7 +42,7 @@ LOG_FILE       = Path("/var/lib/audio-norm/worker.log")
 QUEUE_LOCK     = Path("/var/lib/audio-norm/queue.lock")
 PID_FILE       = Path("/var/lib/audio-norm/worker.pid")
 POLL_INTERVAL  = 10
-COMPLETED_FILE = audio_common.COMPLETED_FILE  # for startup mkdir/touch only
+COMPLETED_FILE = audio_common.COMPLETED_FILE  # startup touch + already-done dedup check
 
 # --- Logging ---
 logging.basicConfig(
@@ -105,11 +105,33 @@ def peek_next() -> tuple[str, Path] | None:
         return None
 
 
-def remove_from_queue(source: Path, filepath_str: str) -> None:
+def remove_everywhere(filepath_str: str) -> None:
+    """Remove a path from both queue.txt and backlog.txt.
+
+    A live arrival is also present in the bulk backlog, so removing the entry
+    from only the queue it was pulled from leaves a stale copy behind that the
+    worker would later dequeue and reprocess.
+    """
     with _QueueLock():
-        entries = _read_queue(source)
-        remaining = [e for e in entries if e != filepath_str]
-        _write_queue(source, remaining)
+        for q in (QUEUE_FILE, BACKLOG_FILE):
+            entries = _read_queue(q)
+            remaining = [e for e in entries if e != filepath_str]
+            if remaining != entries:
+                _write_queue(q, remaining)
+
+
+def _read_completed_paths() -> set[str]:
+    """Paths already recorded in completed.txt (the leading unix-ts is stripped)."""
+    if not COMPLETED_FILE.exists():
+        return set()
+    paths = set()
+    for line in COMPLETED_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        head, sep, rest = line.partition(" ")
+        paths.add(rest if sep and head.isdigit() else line)
+    return paths
 
 
 def log_failed(filepath_str: str) -> None:
@@ -139,25 +161,31 @@ def _layout_for_channels(channels) -> str | None:
 
 # --- Per-file processing ---
 
-def handle_one(filepath_str: str, source: Path) -> None:
+def handle_one(filepath_str: str) -> None:
     """Process the head-of-queue file. Must be called only while holding the lock.
 
-    `source` is the queue file the entry came from (queue.txt or backlog.txt);
-    completion removes the entry from that same file.
+    On every terminal outcome the entry is removed from BOTH queue.txt and
+    backlog.txt: a file can sit in both lists, so removing only one queue
+    leaves a stale copy that would later be reprocessed.
     """
     filepath = Path(filepath_str)
     log.info(f"Dequeued: {filepath.name}")
 
+    if filepath_str in _read_completed_paths():
+        log.info(f"Already completed, skipping: {filepath.name}")
+        remove_everywhere(filepath_str)
+        return
+
     if not filepath.exists():
         log.error(f"File no longer exists: {filepath}")
-        remove_from_queue(source, filepath_str)
+        remove_everywhere(filepath_str)
         log_failed(filepath_str)
         return
 
     info = get_audio_info(filepath)
     if info is None:
         log.error(f"Could not read audio info: {filepath.name}")
-        remove_from_queue(source, filepath_str)
+        remove_everywhere(filepath_str)
         log_failed(filepath_str)
         return
 
@@ -167,7 +195,7 @@ def handle_one(filepath_str: str, source: Path) -> None:
 
     if not needs_normalization(filepath):
         # Already within LUFS window — treat as success.
-        remove_from_queue(source, filepath_str)
+        remove_everywhere(filepath_str)
         log_completed(filepath_str)
         return
 
@@ -184,7 +212,7 @@ def handle_one(filepath_str: str, source: Path) -> None:
     log.info(f"Transcoding ({codec} ch:{channels}): {filepath.name}")
     success = transcode_to_aac(filepath, audio_filter=audio_filter)
 
-    remove_from_queue(source, filepath_str)
+    remove_everywhere(filepath_str)
     if success:
         log_completed(filepath_str)
     else:
@@ -214,7 +242,7 @@ def process_queue() -> None:
             continue
 
         try:
-            handle_one(head, source)
+            handle_one(head)
         finally:
             release_lock()
 
