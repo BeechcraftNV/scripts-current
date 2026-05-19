@@ -114,3 +114,54 @@ get_image_digests() {
 - Changes only when actual image content changes
 - Same across all machines pulling the same version
 - More reliable than local image IDs which can vary
+
+## Related: Container Cycling on Docker Engine Upgrades
+
+### The Problem
+
+Separate from the digest-detection issue above, the host-wide `update-all`
+script runs `apt-get full-upgrade -y`. When that upgrade includes the
+`docker-ce` package, **apt restarts the Docker daemon**.
+
+By default (`live-restore: false`) a daemon restart stops *every* running
+container and relies on each container's restart policy to bring it back.
+Slow-stopping containers can lose this restart race and stay down — even with
+`restart: unless-stopped`.
+
+**Real incident (2026-05-19):** `update-all` upgraded `docker-ce`
+29.5.0 → 29.5.1, bouncing the daemon at 06:20. Jellyfin (mid DB optimization)
+and Subgen (mid Whisper transcribe) were the slowest to stop and did not
+auto-restart. The other ~20 containers came back fine.
+
+### The Fix
+
+Enable **`live-restore`** so containers keep running across daemon
+restarts/upgrades. Edit `/etc/docker/daemon.json`:
+
+```json
+{
+  "log-opts": { "max-size": "10m", "max-file": "3" },
+  "live-restore": true
+}
+```
+
+Apply with a reload (does **not** cycle containers):
+
+```bash
+sudo systemctl reload docker
+```
+
+Verify:
+
+```bash
+docker info --format 'live-restore: {{.LiveRestoreEnabled}}'   # -> true
+```
+
+With `live-restore` enabled, future `docker-ce` upgrades via `update-all`
+leave all running containers untouched.
+
+### Caveats
+
+- `live-restore` is incompatible with Docker Swarm mode (not used here).
+- Changing the option fully takes effect on the next daemon restart, but
+  `reload` is enough to enable it without disturbing containers.
