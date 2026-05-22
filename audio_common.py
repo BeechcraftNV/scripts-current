@@ -25,8 +25,17 @@ from pathlib import Path
 AUDIO_BITRATE  = "192k"
 LOUDNORM       = "loudnorm=I=-16:TP=-1.5:LRA=11"
 LUFS_TARGET    = -16.0
-LUFS_THRESHOLD = 2.0
+LUFS_THRESHOLD = 1.5
 MIN_FREE_GB    = 5
+
+# LUFS measurement: long files are sampled at several spread-out windows rather
+# than decoded in full (the result only feeds the +/-LUFS_THRESHOLD skip gate).
+LUFS_SAMPLE_WINDOWS      = 4      # probe windows for long files
+LUFS_SAMPLE_WINDOW_SEC   = 60     # seconds per window
+LUFS_SAMPLE_MIN_DURATION = 360    # files shorter than this get a full scan
+LUFS_WINDOW_TIMEOUT      = 180    # per-window ffmpeg cap (s)
+LUFS_FULL_TIMEOUT        = 900    # whole-file scan cap (s) - short files / fallback
+LUFS_SILENCE_GATE        = -60.0  # windows quieter than this are dropped as silence
 LOCK_FILE      = Path("/var/lib/audio-norm/processing.lock")
 COMPLETED_FILE = Path("/var/lib/audio-norm/completed.txt")
 LOCK_WAIT      = 60
@@ -136,38 +145,104 @@ def verify_output(filepath: Path) -> bool:
 
 # --- LUFS measurement ---
 
-def measure_lufs(filepath: Path) -> float | None:
-    """Measure integrated loudness via loudnorm analysis pass."""
+def _probe_duration(filepath: Path) -> float | None:
+    """Container duration in seconds, or None if unavailable."""
     cmd = [
-        "ffmpeg", "-i", str(filepath),
-        "-af", f"{LOUDNORM}:print_format=json",
-        "-f", "null", "-",
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(filepath),
     ]
     try:
-        log.info(f"Measuring LUFS: {filepath.name}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return float(result.stdout.strip())
+    except (ValueError, subprocess.SubprocessError):
+        return None
 
-        match = re.search(r'\{[^{}]*"input_i"\s*:[^{}]*\}', result.stderr, re.DOTALL)
-        if not match:
-            log.warning(f"Could not parse loudnorm output for: {filepath.name}")
-            return None
 
-        data = json.loads(match.group())
-        lufs = float(data.get("input_i", "nan"))
+def _loudnorm_input_i(
+    filepath: Path,
+    ss: float | None = None,
+    duration: float | None = None,
+    timeout: int = LUFS_FULL_TIMEOUT,
+) -> float | None:
+    """One loudnorm analysis pass -> integrated loudness (input_i).
 
-        if math.isnan(lufs) or lufs < -100:
-            log.warning(f"Invalid LUFS measurement for: {filepath.name}")
-            return None
+    With ss/duration set, only that window is decoded (fast input seek);
+    otherwise the whole file is scanned. None on timeout/parse failure.
+    """
+    cmd = ["ffmpeg"]
+    if ss is not None:
+        cmd += ["-ss", f"{ss:.3f}"]
+    cmd += ["-i", str(filepath)]
+    if duration is not None:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-vn", "-sn", "-af", f"{LOUDNORM}:print_format=json", "-f", "null", "-"]
 
-        log.info(f"Measured {lufs:.1f} LUFS: {filepath.name}")
-        return lufs
-
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         log.error(f"LUFS measurement timed out: {filepath.name}")
         return None
     except Exception as e:
         log.error(f"LUFS measurement failed: {filepath.name}: {e}")
         return None
+
+    match = re.search(r'\{[^{}]*"input_i"\s*:[^{}]*\}', result.stderr, re.DOTALL)
+    if not match:
+        log.warning(f"Could not parse loudnorm output for: {filepath.name}")
+        return None
+    try:
+        lufs = float(json.loads(match.group()).get("input_i", "nan"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if math.isnan(lufs) or lufs < -100:
+        return None
+    return lufs
+
+
+def measure_lufs(filepath: Path) -> float | None:
+    """Estimate integrated loudness.
+
+    Long files are sampled at several spread-out windows rather than decoded in
+    full: the result only feeds a +/-LUFS_THRESHOLD skip decision, so a
+    representative estimate suffices and avoids multi-minute full-file decodes
+    (esp. high-sample-rate / lossless tracks). Short files are scanned whole.
+    """
+    duration = _probe_duration(filepath)
+
+    # Short or unknown-length: cheap enough to scan in full (old behavior).
+    if duration is None or duration < LUFS_SAMPLE_MIN_DURATION:
+        log.info(f"Measuring LUFS (full): {filepath.name}")
+        lufs = _loudnorm_input_i(filepath, timeout=LUFS_FULL_TIMEOUT)
+        if lufs is not None:
+            log.info(f"Measured {lufs:.1f} LUFS: {filepath.name}")
+        return lufs
+
+    # Spread N windows across the body, skipping the first/last 10% (intros,
+    # credits, trailing silence) so the sample reflects program content.
+    win, n = LUFS_SAMPLE_WINDOW_SEC, LUFS_SAMPLE_WINDOWS
+    start, end = duration * 0.10, duration * 0.90
+    span = max(end - start - win, 0.0)
+    offsets = [start + span * i / (n - 1) for i in range(n)] if n > 1 else [start]
+
+    log.info(f"Measuring LUFS (sampled {n}x{win}s of {duration/60:.0f}min): {filepath.name}")
+    values = []
+    for off in offsets:
+        v = _loudnorm_input_i(filepath, ss=off, duration=win, timeout=LUFS_WINDOW_TIMEOUT)
+        if v is not None and v >= LUFS_SILENCE_GATE:
+            values.append(v)
+
+    if not values:
+        log.warning(f"No usable LUFS samples (all silent/failed): {filepath.name}")
+        return None
+
+    # Combine in the energy domain (LUFS is a power measure) so loud windows
+    # weigh correctly, approximating a whole-program integrated reading.
+    mean_energy = sum(10 ** (v / 10.0) for v in values) / len(values)
+    lufs = 10.0 * math.log10(mean_energy)
+    log.info(f"Measured {lufs:.1f} LUFS (sampled {len(values)}/{n} windows): {filepath.name}")
+    return lufs
 
 
 def needs_normalization(
